@@ -229,34 +229,33 @@ ${ctx.slice(0, 5000)}
 
 function cleanForTelegram(text) {
   if (typeof text !== "string") return "";
-  var result = text;
-  // Remove bold markdown
-  result = result.replace(/[*][*]([^*]+)[*][*]/g, "$1");
-  // Remove italic markdown  
-  result = result.replace(/[*]([^*]+)[*]/g, "$1");
-  // Remove headers
-  result = result.replace(/^#{1,6} /gm, "");
-  // Remove code blocks
-  result = result.replace(/```[^`]*```/g, "");
-  result = result.replace(/`([^`]+)`/g, "$1");
-  // Convert links to plain text
-  result = result.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
-  // Remove underline markdown
-  result = result.replace(/__([^_]+)__/g, "$1");
-  result = result.replace(/_([^_]+)_/g, "$1");
-  // Remove invisible unicode chars
-  result = result.replace(/⠀/g, "");
-  result = result.replace(/⁠/g, "");
-  result = result.replace(/​/g, "");
-  result = result.replace(/ /g, " ");
+  var s = text;
+  // Remove ** bold markers
+  s = s.split("**").join("");
+  // Remove single * italic markers  
+  s = s.split("*").join("");
+  // Remove # headers
+  s = s.replace(/^#{1,6} /gm, "");
+  // Remove backticks
+  s = s.split("`").join("");
+  // Remove underscores pairs
+  s = s.split("__").join("");
   // Remove triple dashes
-  result = result.replace(/^---+$/gm, "");
-  // Clean up multiple blank lines
-  result = result.replace(/
+  s = s.replace(/^---+$/gm, "");
+  // Remove invisible unicode
+  s = s.replace(/⠀/g, "");
+  s = s.replace(/⁠/g, "");
+  s = s.replace(/​/g, "");
+  s = s.replace(/ /g, " ");
+  // Remove markdown links - replace [text](url) with text
+  var linkRe = /[([^]]*)]([^)]*)/g;
+  s = s.replace(linkRe, "$1");
+  // Clean extra blank lines
+  s = s.replace(/
 {3,}/g, "
 
 ");
-  return result.trim();
+  return s.trim();
 }
 
 function extractPost(raw) {
