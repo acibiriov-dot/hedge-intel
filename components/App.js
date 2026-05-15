@@ -393,7 +393,7 @@ export default function App() {
           }
           dataRef.current[tgEng.id] = result;
           setResults(p => ({ ...p, [tgEng.id]: result }));
-          const tgHasError = result.includes("Превышен лимит") || result.includes("__RATE_LIMIT__");
+          const tgHasError = result.includes("Превышен лимит") || result.includes("__RATE_LIMIT__") || result.includes("Повтор") || result.includes("rate_limit");
           setStatuses(p => ({ ...p, [tgEng.id]: tgHasError ? "error" : "done" }));
         } catch (err) {
           setStatuses(p => ({ ...p, [tgEng.id]: "error" }));
