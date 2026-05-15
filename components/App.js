@@ -161,86 +161,69 @@ const PROMPTS = {
 };;
 
 function getTelegramPrompts(t, ctx) {
-  const base = `Ты создаёшь серию из 3 Telegram постов для инвестиционного канала @OKI_invest.
+  const base = `Создай ТРИ Telegram поста для канала @OKI_invest по тикеру ${t}.
 Дата: ${getNow()}
 
-КОНТЕКСТ АНАЛИЗА (используй данные из ВСЕХ разделов):
-${ctx}
+ДАННЫЕ ДЛЯ ПОСТОВ:
+${ctx.slice(0, 5000)}
 
-КРИТИЧЕСКИ ВАЖНО:
-- Все цифры и факты ТОЛЬКО из контекста выше
-- Каждый пост строго до указанного лимита символов
-- Только русский язык
-- Формат канала @OKI_invest соблюдать точно
+СТРОГО СОБЛЮДАЙ СТРУКТУРУ — три секции с точными заголовками:
 
-Создай ТРИ поста:
-
----
-## ПОСТ 1 — КРЮЧОК (строго до 900 символов — это caption к постеру)
-Структура:
+## ПОСТ 1
 🧠 [ТЕМА] DIGEST · [подзаголовок]
 ⠀
-[Крючок — 1-2 предложения которые заставляют читать дальше]
+[Крючок — 1-2 предложения]
 ⠀
 ① ${t} · [Полное название]
-💲 Цена ~$X · Таргет $X · Потенциал роста +X%
+💲 Цена ~$X · Таргет $X · Потенциал +X%
 ⠀
-▸ [самый сильный факт + цифра]
-▸ [второй ключевой факт + цифра]
-▸ [третий факт + цифра]
+▸ [факт + цифра из данных]
+▸ [факт + цифра из данных]
+▸ [факт + цифра из данных]
 ⠀
 👉 Подробный разбор — в следующем посте ↓
 
----
-## ПОСТ 2 — ГЛУБОКИЙ АНАЛИЗ (до 3500 символов)
-Структура:
+## ПОСТ 2
 📊 ${t} · Детальный разбор
 ⠀
-[Раздел: Финансы и рост]
-▸ [данные из Анализ тикера]
-▸ [данные из Основной анализ]
+💰 ФИНАНСЫ И РОСТ
+▸ [данные о выручке и росте]
+▸ [данные о прогнозе]
+▸ [данные об аналитиках]
 ⠀
-[Раздел: Институциональный капитал]
-▸ [данные из Умные деньги]
-▸ [данные из Межрыночный анализ]
+🏦 ИНСТИТУЦИОНАЛЬНЫЙ КАПИТАЛ
+▸ [кто покупает/продаёт]
+▸ [короткие позиции]
 ⠀
-[Раздел: Нарратив и катализаторы]
-▸ [данные из Нарратив]
-▸ [данные из Альтернативные данные]
+📊 СЦЕНАРИИ
+🐻 Медвежий (X%): [триггер · цель $X]
+📊 Базовый (X%): [триггер · цель $X]
+🐂 Бычий (X%): [триггер · цель $X]
 ⠀
-[Раздел: Сценарии]
-🐻 Медвежий (X%): [из Модель вероятностей]
-📊 Базовый (X%): [из Модель вероятностей]
-🐂 Бычий (X%): [из Модель вероятностей]
+⚠️ Риски: [конкретно с цифрами]
 ⠀
-⚠️ Ключевые риски: [конкретно с цифрами]
-⠀
-👉 Опционные стратегии — в следующем посте ↓
+👉 Торговые стратегии — в следующем посте ↓
 
----
-## ПОСТ 3 — СТРАТЕГИЯ (до 3000 символов)
-Структура:
+## ПОСТ 3
 ⚙️ ${t} · Торговые стратегии
 ⠀
-[Раздел: Технический анализ]
-📈 Тренд: [из Технический анализ]
-Поддержка: $X · Сопротивление: $X · Стоп-лосс: $X
+📈 ТЕХНИЧЕСКИЙ АНАЛИЗ
+Тренд: [бычий/медвежий/нейтральный]
+Поддержка: $X · Сопротивление: $X · Стоп: $X
 ⠀
-[Раздел: Опционные стратегии из раздела Опционы]
-⚙️ Опционные стратегии
+⚙️ ОПЦИОННЫЕ СТРАТЕГИИ
 ⠀
 Стратегия 1 — [название]
-[страйк, экспирация, примерная премия, максимальная прибыль]
+[страйк $X, экспирация дата, премия ~$X, макс прибыль $X]
 ⠀
 Стратегия 2 — [название]
-[страйк, экспирация, детали, безубыток]
+[страйк $X, экспирация дата, безубыток $X]
 ⠀
-📋 Итоговый вывод: [2-3 предложения]
+📋 ИТОГ: [2-3 предложения финального вывода]
 ⠀
 #${t} #инвестиции #акции #опционы
 ⠀
 *Не является инвестиционной рекомендацией. DYOR.*`;
-
   return base;
 }
 
@@ -475,45 +458,48 @@ export default function App() {
 
   async function genPoster() {
     const t = ticker.toUpperCase();
-    const brief = editablePost.slice(0, 500);
-    const prompt = `Яркий комикс-постер в стиле Marvel/DC. Главный тизер для инвестиционного канала.
-Тикер: ${t}. Акцент: компания, текущая цена, главный тезис, почему это важно прямо сейчас.
-Структура: большой заголовок ${t} · 4-5 панелей с иллюстрациями · финальный вердикт.
-Стиль: жирные контурные линии, золотой/чёрный/красный, bold шрифты, экшн-иллюстрации.
-Водяной знак: @OKI_invest. Содержание: ${brief}`;
+    const brief = editablePost.slice(0, 400);
+    const prompt = `Marvel Comics style investment poster for stock ${t}. Vibrant, dynamic, professional.
+Style: bold black outlines, vivid colors (gold, black, red), Marvel comic panels, action illustrations, bold typography. NO blurry text.
+Layout: LARGE title "${t}" at top, 4-5 comic panels each showing one key insight, final verdict at bottom in bold.
+Text in panels must be clear, sharp and readable. Use simple short English labels in panels.
+Watermark: @OKI_invest in corner.
+Key data to illustrate: ${brief}`;
     await buildPoster(prompt, setPosterUrl, setPosterLoading);
   }
 
   async function genPoster2() {
     const t = ticker.toUpperCase();
-    const brief = editablePost2.slice(0, 500);
-    const prompt = `Аналитический комикс-постер в стиле Marvel/DC. Глубокий анализ для инвестиционного канала.
-Тикер: ${t}. Акцент: финансовые данные, институциональный капитал, сценарии развития, вероятности.
-Визуальные элементы: графики роста, таблицы данных, иллюстрации аналитика, медвежий/бычий сценарий.
-Структура: заголовок "Анализ ${t}" · 4-5 аналитических панелей · сравнение сценариев.
-Стиль: жирные контурные линии, синий/белый/золотой, bold шрифты, профессиональный тон.
-Водяной знак: @OKI_invest. Содержание: ${brief}`;
+    const brief = editablePost2.slice(0, 400);
+    const prompt = `Marvel Comics analytical investment poster for ${t}. Deep analysis theme.
+Style: bold black outlines, blue/white/gold colors, professional analytical tone, comic panels, sharp readable text.
+Layout: title "DEEP ANALYSIS: ${t}" at top, 4-5 panels showing financial data/institutional moves/scenarios, probability comparison panel.
+Each panel has clear bold English label and illustration. Charts, graphs, bull vs bear icons.
+Text must be crisp and readable. NO blurry text.
+Watermark: @OKI_invest.
+Data to illustrate: ${brief}`;
     await buildPoster(prompt, setPosterUrl2, setPosterLoading2);
   }
 
   async function genPoster3() {
     const t = ticker.toUpperCase();
-    const brief = editablePost3.slice(0, 500);
-    const prompt = `Стратегический комикс-постер в стиле Marvel/DC. Торговые стратегии для инвестиционного канала.
-Тикер: ${t}. Акцент: опционные стратегии, уровни входа, технический анализ, итоговый вывод.
-Визуальные элементы: опционная цепочка, графики с уровнями поддержки/сопротивления, стрелки направления.
-Структура: заголовок "Стратегия ${t}" · 4-5 панелей со стратегиями · призыв к действию.
-Стиль: жирные контурные линии, зелёный/чёрный/золотой, bold шрифты, энергичный тон.
-Водяной знак: @OKI_invest. Содержание: ${brief}`;
+    const brief = editablePost3.slice(0, 400);
+    const prompt = `Marvel Comics trading strategy poster for ${t}. Action-packed, energetic.
+Style: bold black outlines, green/black/gold colors, dynamic action illustrations, sharp comic panels.
+Layout: title "STRATEGY: ${t}" at top, 4-5 panels showing entry levels/options strategies/technical analysis/stop levels, strong call-to-action at bottom.
+Show price levels, arrows indicating direction, options chain visualization.
+Text must be crisp bold and readable. NO blurry or distorted text.
+Watermark: @OKI_invest.
+Data to illustrate: ${brief}`;
     await buildPoster(prompt, setPosterUrl3, setPosterLoading3);
   }
 
   async function genAllPosters() {
     setAppError(null);
     await genPoster();
-    await new Promise(r => setTimeout(r, 3000));
+    await new Promise(r => setTimeout(r, 5000));
     await genPoster2();
-    await new Promise(r => setTimeout(r, 3000));
+    await new Promise(r => setTimeout(r, 5000));
     await genPoster3();
   }
 
