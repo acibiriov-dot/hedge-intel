@@ -567,22 +567,41 @@ ${brief}`;
     setShowPreview(true);
   }
 
+  async function sendToTelegram(text, imgUrl, setStatus) {
+    const tgBase = "https://api.telegram.org/bot" + tgToken;
+    // Send poster directly from browser if available
+    if (imgUrl && imgUrl.startsWith("data:")) {
+      const arr = imgUrl.split(",");
+      const mime = "image/png";
+      const bstr = atob(arr[1]);
+      const u8 = new Uint8Array(bstr.length);
+      for (let i = 0; i < bstr.length; i++) u8[i] = bstr.charCodeAt(i);
+      const blob = new Blob([u8], { type: mime });
+      const form = new FormData();
+      form.append("chat_id", tgChatId);
+      form.append("photo", blob, "poster.png");
+      form.append("caption", text.slice(0, 1024));
+      const r = await fetch(tgBase + "/sendPhoto", { method: "POST", body: form });
+      const d = await r.json();
+      if (!d.ok) throw new Error(d.description);
+      return;
+    }
+    // Text only - go through server
+    const res = await fetch("/api/telegram", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: tgToken, chatId: tgChatId, text }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "TG error");
+  }
+
   async function publish() {
     if (!tgToken || !tgChatId) return;
     setTgStatus("sending");
     setAppError(null);
     try {
-      const body = { token: tgToken, chatId: tgChatId, text: cleanForTelegram(editablePost), noMarkdown: true };
-      if (posterUrl && posterUrl.startsWith("data:")) {
-        body.imageBase64 = posterUrl.split(",")[1];
-      }
-      const res = await fetch("/api/telegram", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "TG error");
+      await sendToTelegram(editablePost, posterUrl, setTgStatus);
       setTgStatus("sent");
       setShowPreview(false);
     } catch (err) {
@@ -595,17 +614,7 @@ ${brief}`;
     if (!tgToken || !tgChatId) return;
     setTgStatus2("sending");
     try {
-      const cleanText = cleanForTelegram(editablePost2);
-      const body2 = { token: tgToken, chatId: tgChatId, text: cleanText, noMarkdown: true };
-      if (posterUrl2 && posterUrl2.startsWith("data:")) {
-        body2.imageBase64 = posterUrl2.split(",")[1];
-      }
-      const r = await fetch("/api/telegram", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body2),
-      });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error || "TG error");
+      await sendToTelegram(editablePost2, posterUrl2, setTgStatus2);
       setTgStatus2("sent");
     } catch (err) { setAppError("Ошибка TG: " + err.message); setTgStatus2("error"); }
   }
@@ -614,16 +623,7 @@ ${brief}`;
     if (!tgToken || !tgChatId) return;
     setTgStatus3("sending");
     try {
-      const body3 = { token: tgToken, chatId: tgChatId, text: cleanForTelegram(editablePost3), noMarkdown: true };
-      if (posterUrl3 && posterUrl3.startsWith("data:")) {
-        body3.imageBase64 = posterUrl3.split(",")[1];
-      }
-      const r = await fetch("/api/telegram", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body3),
-      });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error || "TG error");
+      await sendToTelegram(editablePost3, posterUrl3, setTgStatus3);
       setTgStatus3("sent");
     } catch (err) { setAppError("Ошибка TG: " + err.message); setTgStatus3("error"); }
   }
