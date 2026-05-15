@@ -160,74 +160,106 @@ const PROMPTS = {
 Стадия: ранняя / нарастающая / пиковая / насыщенная + время до мейнстрима`,
 };;
 
-function getTelegramPrompt(t, ctx) {
-  return `Ты создаёшь профессиональный Telegram пост для инвестиционного канала @OKI_invest.
+function getTelegramPrompts(t, ctx) {
+  const base = `Ты создаёшь серию из 3 Telegram постов для инвестиционного канала @OKI_invest.
 Дата: ${getNow()}
 
-КОНТЕКСТ АНАЛИЗА (используй данные из ВСЕХ секций):
+КОНТЕКСТ АНАЛИЗА (используй данные из ВСЕХ разделов):
 ${ctx}
 
-ОБЯЗАТЕЛЬНЫЕ ТРЕБОВАНИЯ:
-1. Цену бери ТОЛЬКО из [Ticker Analysis] — реальная текущая цена
-2. Таргеты аналитиков — из [Ticker Analysis] или [Core Intelligence]
-3. Опционные стратегии — из [Options & Flow] с реальными страйками
-4. Риски — из [Probability Model]
-5. Нарратив — из [Narrative Velocity]
-6. Smart money данные — из [Smart Money]
-7. НЕ ВЫДУМЫВАЙ данные. Только реальные цифры из контекста выше.
-8. Каждый пункт ▸ должен содержать конкретную цифру из контекста.
+КРИТИЧЕСКИ ВАЖНО:
+- Все цифры и факты ТОЛЬКО из контекста выше
+- Каждый пост строго до указанного лимита символов
+- Только русский язык
+- Формат канала @OKI_invest соблюдать точно
 
-ФОРМАТ (строго соблюдай структуру канала @OKI_invest):
+Создай ТРИ поста:
 
+---
+## ПОСТ 1 — КРЮЧОК (строго до 900 символов — это caption к постеру)
+Структура:
 🧠 [ТЕМА] DIGEST · [подзаголовок]
 ⠀
-[Крючок 1-2 предложения — почему это важно прямо сейчас]
+[Крючок — 1-2 предложения которые заставляют читать дальше]
 ⠀
-① ${t} · [Реальное полное название]
+① ${t} · [Полное название]
+💲 Цена ~$X · Таргет $X · Потенциал роста +X%
 ⠀
-💲 Цена ~$[РЕАЛЬНАЯ ЦЕНА] · Таргет $[РЕАЛЬНЫЙ] · Апсайд +X%
+▸ [самый сильный факт + цифра]
+▸ [второй ключевой факт + цифра]
+▸ [третий факт + цифра]
 ⠀
-[1-2 предложения суть идеи]
+👉 Подробный разбор — в следующем посте ↓
+
+---
+## ПОСТ 2 — ГЛУБОКИЙ АНАЛИЗ (до 3500 символов)
+Структура:
+📊 ${t} · Детальный разбор
 ⠀
-▸ [конкретный факт + реальная цифра из контекста]
-▸ [конкретный факт + реальная цифра из контекста]
-▸ [конкретный факт + реальная цифра из контекста]
-▸ [конкретный факт + реальная цифра из контекста]
-▸ [конкретный факт + реальная цифра из контекста]
+[Раздел: Финансы и рост]
+▸ [данные из Анализ тикера]
+▸ [данные из Основной анализ]
 ⠀
-⚠️ Риски: [конкретные риски с цифрами из Probability модуля]
+[Раздел: Институциональный капитал]
+▸ [данные из Умные деньги]
+▸ [данные из Межрыночный анализ]
 ⠀
+[Раздел: Нарратив и катализаторы]
+▸ [данные из Нарратив]
+▸ [данные из Альтернативные данные]
+⠀
+[Раздел: Сценарии]
+🐻 Медвежий (X%): [из Модель вероятностей]
+📊 Базовый (X%): [из Модель вероятностей]
+🐂 Бычий (X%): [из Модель вероятностей]
+⠀
+⚠️ Ключевые риски: [конкретно с цифрами]
+⠀
+👉 Опционные стратегии — в следующем посте ↓
+
+---
+## ПОСТ 3 — СТРАТЕГИЯ (до 3000 символов)
+Структура:
+⚙️ ${t} · Торговые стратегии
+⠀
+[Раздел: Технический анализ]
+📈 Тренд: [из Технический анализ]
+Поддержка: $X · Сопротивление: $X · Стоп-лосс: $X
+⠀
+[Раздел: Опционные стратегии из раздела Опционы]
 ⚙️ Опционные стратегии
 ⠀
-[Стратегия 1 из Options модуля — страйк, экспирация, ~премия]
+Стратегия 1 — [название]
+[страйк, экспирация, примерная премия, максимальная прибыль]
 ⠀
-[Стратегия 2 из Options модуля — страйк, экспирация, детали]
+Стратегия 2 — [название]
+[страйк, экспирация, детали, безубыток]
 ⠀
-👉 [Итоговый вывод 1-2 предложения]
+📋 Итоговый вывод: [2-3 предложения]
 ⠀
 #${t} #инвестиции #акции #опционы
 ⠀
-*Не является инвестиционной рекомендацией. DYOR.*
+*Не является инвестиционной рекомендацией. DYOR.*`;
 
----
-## TELEGRAM POST
-[только пост выше без этой строки]
-
-## POSTER BRIEF
-7 конкретных тезисов с реальными цифрами для комикс-постера:
-1.
-2.
-3.
-4.
-5.
-6.
-7.`;
+  return base;
 }
 
 function extractPost(raw) {
   if (typeof raw !== "string") return "";
   const m = raw.match(/##\s*TELEGRAM POST\s*([\s\S]*?)(?=##\s*POSTER BRIEF|$)/i);
   return m ? m[1].trim() : raw.slice(0, 2000).trim();
+}
+
+function extractThreePosts(raw) {
+  if (typeof raw !== "string") return { post1: "", post2: "", post3: "" };
+  const p1match = raw.match(/##\s*ПОСТ 1[^\n]*\n([\s\S]*?)(?=##\s*ПОСТ 2|$)/i);
+  const p2match = raw.match(/##\s*ПОСТ 2[^\n]*\n([\s\S]*?)(?=##\s*ПОСТ 3|$)/i);
+  const p3match = raw.match(/##\s*ПОСТ 3[^\n]*\n([\s\S]*?)$/i);
+  return {
+    post1: p1match ? p1match[1].trim() : "",
+    post2: p2match ? p2match[1].trim() : "",
+    post3: p3match ? p3match[1].trim() : "",
+  };
 }
 
 function extractBrief(raw) {
@@ -255,7 +287,18 @@ export default function App() {
   const [appError, setAppError] = useState(null);
   const [showPreview, setShowPreview] = useState(false);
   const [editablePost, setEditablePost] = useState("");
+  const [editablePost2, setEditablePost2] = useState("");
+  const [editablePost3, setEditablePost3] = useState("");
+  const [activePostTab, setActivePostTab] = useState(1);
   const [copied, setCopied] = useState(false);
+  const [copied2, setCopied2] = useState(false);
+  const [copied3, setCopied3] = useState(false);
+  const [tgStatus2, setTgStatus2] = useState(null);
+  const [tgStatus3, setTgStatus3] = useState(null);
+  const [posterUrl2, setPosterUrl2] = useState(null);
+  const [posterLoading2, setPosterLoading2] = useState(false);
+  const [posterUrl3, setPosterUrl3] = useState(null);
+  const [posterLoading3, setPosterLoading3] = useState(false);
   const [phase, setPhase] = useState("");
   const dataRef = useRef({});
   const abortRef = useRef(null);
@@ -325,7 +368,11 @@ export default function App() {
     setActiveTab(null);
     setStatuses(Object.fromEntries(ENGINES.map(e => [e.id, "pending"])));
     setPosterUrl(null);
+    setPosterUrl2(null);
+    setPosterUrl3(null);
     setTgStatus(null);
+    setTgStatus2(null);
+    setTgStatus3(null);
     setAppError(null);
     setShowPreview(false);
     abortRef.current = new AbortController();
@@ -352,11 +399,11 @@ export default function App() {
         ).join("\n\n---\n\n");
 
         try {
-          let result = await callEngine(getTelegramPrompt(t, ctx), false);
+          let result = await callEngine(getTelegramPrompts(t, ctx), false);
           // If rate limited, retry once after pause
           if (result === "__RATE_LIMIT__" || result.includes("__RATE_LIMIT__")) {
             await sleep(10000);
-            result = await callEngine(getTelegramPrompt(t, ctx), false);
+            result = await callEngine(getTelegramPrompts(t, ctx), false);
           }
           if (result === "__RATE_LIMIT__" || result.includes("__RATE_LIMIT__")) {
             result = "⚠️ Превышен лимит. Нажми ↺ Повтор на модуле 10.";
@@ -389,10 +436,10 @@ export default function App() {
         "[" + e.label + "]:\n" + (dataRef.current[e.id] || "нет данных").slice(0, 900)
       ).join("\n\n---\n\n");
       try {
-        let result = await callEngine(getTelegramPrompt(t, ctx), false);
+        let result = await callEngine(getTelegramPrompts(t, ctx), false);
         if (result === "__RATE_LIMIT__" || result.includes("__RATE_LIMIT__")) {
           await sleep(10000);
-          result = await callEngine(getTelegramPrompt(t, ctx), false);
+          result = await callEngine(getTelegramPrompts(t, ctx), false);
         }
         if (result === "__RATE_LIMIT__" || result.includes("__RATE_LIMIT__")) {
           result = "⚠️ Превышен лимит. Нажми ↺ Повтор ещё раз через минуту.";
@@ -408,34 +455,79 @@ export default function App() {
     }
   }
 
-  async function genPoster() {
-    if (!openaiKey || !dataRef.current.telegram) return;
-    setPosterLoading(true);
-    setPosterUrl(null);
-    setAppError(null);
+  async function buildPoster(promptText, setUrl, setLoading) {
+    if (!openaiKey) return;
+    setLoading(true);
     try {
-      const brief = extractBrief(dataRef.current.telegram);
-      const prompt = `Marvel Comics style poster — vibrant, dynamic, bold headlines, action illustrations, comic panels. Title: ${ticker.toUpperCase()}. 5-6 panels each = one investment insight. Final verdict at bottom. Watermark: @OKI_invest. Content: ${brief}`;
-
       const res = await fetch("/api/poster", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ openaiKey, prompt }),
+        body: JSON.stringify({ openaiKey, prompt: promptText }),
       });
       const data = await res.json();
-      if (!res.ok) { setAppError("Ошибка постера: " + (data.error || "неизвестно")); return; }
-      if (data.data?.[0]?.b64_json) setPosterUrl("data:image/png;base64," + data.data[0].b64_json);
-      else if (data.data?.[0]?.url) setPosterUrl(data.data[0].url);
+      if (!res.ok) { setAppError("Ошибка постера: " + (data.error || "неизвестно")); }
+      else if (data.data?.[0]?.b64_json) setUrl("data:image/png;base64," + data.data[0].b64_json);
+      else if (data.data?.[0]?.url) setUrl(data.data[0].url);
       else setAppError("Постер не получен.");
-    } catch (err) {
-      setAppError("Ошибка постера: " + err.message);
-    }
-    setPosterLoading(false);
+    } catch (err) { setAppError("Ошибка постера: " + err.message); }
+    setLoading(false);
+  }
+
+  async function genPoster() {
+    const t = ticker.toUpperCase();
+    const brief = editablePost.slice(0, 500);
+    const prompt = `Яркий комикс-постер в стиле Marvel/DC. Главный тизер для инвестиционного канала.
+Тикер: ${t}. Акцент: компания, текущая цена, главный тезис, почему это важно прямо сейчас.
+Структура: большой заголовок ${t} · 4-5 панелей с иллюстрациями · финальный вердикт.
+Стиль: жирные контурные линии, золотой/чёрный/красный, bold шрифты, экшн-иллюстрации.
+Водяной знак: @OKI_invest. Содержание: ${brief}`;
+    await buildPoster(prompt, setPosterUrl, setPosterLoading);
+  }
+
+  async function genPoster2() {
+    const t = ticker.toUpperCase();
+    const brief = editablePost2.slice(0, 500);
+    const prompt = `Аналитический комикс-постер в стиле Marvel/DC. Глубокий анализ для инвестиционного канала.
+Тикер: ${t}. Акцент: финансовые данные, институциональный капитал, сценарии развития, вероятности.
+Визуальные элементы: графики роста, таблицы данных, иллюстрации аналитика, медвежий/бычий сценарий.
+Структура: заголовок "Анализ ${t}" · 4-5 аналитических панелей · сравнение сценариев.
+Стиль: жирные контурные линии, синий/белый/золотой, bold шрифты, профессиональный тон.
+Водяной знак: @OKI_invest. Содержание: ${brief}`;
+    await buildPoster(prompt, setPosterUrl2, setPosterLoading2);
+  }
+
+  async function genPoster3() {
+    const t = ticker.toUpperCase();
+    const brief = editablePost3.slice(0, 500);
+    const prompt = `Стратегический комикс-постер в стиле Marvel/DC. Торговые стратегии для инвестиционного канала.
+Тикер: ${t}. Акцент: опционные стратегии, уровни входа, технический анализ, итоговый вывод.
+Визуальные элементы: опционная цепочка, графики с уровнями поддержки/сопротивления, стрелки направления.
+Структура: заголовок "Стратегия ${t}" · 4-5 панелей со стратегиями · призыв к действию.
+Стиль: жирные контурные линии, зелёный/чёрный/золотой, bold шрифты, энергичный тон.
+Водяной знак: @OKI_invest. Содержание: ${brief}`;
+    await buildPoster(prompt, setPosterUrl3, setPosterLoading3);
+  }
+
+  async function genAllPosters() {
+    setAppError(null);
+    await genPoster();
+    await new Promise(r => setTimeout(r, 3000));
+    await genPoster2();
+    await new Promise(r => setTimeout(r, 3000));
+    await genPoster3();
   }
 
   function openPreview() {
-    const post = extractPost(dataRef.current.telegram || "");
-    setEditablePost(post + "\n⠀\n[Подписаться на канал →](https://t.me/OKI_invest)");
+    const raw = dataRef.current.telegram || "";
+    const posts = extractThreePosts(raw);
+    const subscribe = "\n⠀\n[Подписаться на канал →](https://t.me/OKI_invest)";
+    setEditablePost(posts.post1 || extractPost(raw));
+    setEditablePost2(posts.post2 + subscribe);
+    setEditablePost3(posts.post3 + subscribe);
+    setActivePostTab(1);
+    setTgStatus(null);
+    setTgStatus2(null);
+    setTgStatus3(null);
     setShowPreview(true);
   }
 
@@ -461,6 +553,64 @@ export default function App() {
       setAppError("Ошибка TG: " + err.message);
       setTgStatus("error");
     }
+  }
+
+  async function publish2() {
+    if (!tgToken || !tgChatId) return;
+    setTgStatus2("sending");
+    try {
+      const r = await fetch("/api/telegram", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: tgToken, chatId: tgChatId, text: editablePost2 }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || "TG error");
+      setTgStatus2("sent");
+    } catch (err) { setAppError("Ошибка TG: " + err.message); setTgStatus2("error"); }
+  }
+
+  async function publish3() {
+    if (!tgToken || !tgChatId) return;
+    setTgStatus3("sending");
+    try {
+      const body3 = { token: tgToken, chatId: tgChatId, text: editablePost3 };
+      if (posterUrl3 && posterUrl3.startsWith("data:")) {
+        body3.imageBase64 = posterUrl3.split(",")[1];
+      }
+      const r = await fetch("/api/telegram", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body3),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || "TG error");
+      setTgStatus3("sent");
+    } catch (err) { setAppError("Ошибка TG: " + err.message); setTgStatus3("error"); }
+  }
+
+  async function genPoster2() {
+    if (!openaiKey || !editablePost3) return;
+    setPosterLoading2(true); setPosterUrl2(null);
+    try {
+      const brief = editablePost3.slice(0, 600);
+      const prompt = "Marvel Comics style investment poster — bold headlines, action comic panels, vivid colors. Ticker: " + ticker.toUpperCase() + ". Focus: options strategies and technical analysis. Watermark: @OKI_invest. Content: " + brief;
+      const res = await fetch("/api/poster", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ openaiKey, prompt }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setAppError("Ошибка постера 2: " + (data.error || "неизвестно")); return; }
+      if (data.data?.[0]?.b64_json) setPosterUrl2("data:image/png;base64," + data.data[0].b64_json);
+      else if (data.data?.[0]?.url) setPosterUrl2(data.data[0].url);
+    } catch (err) { setAppError("Ошибка постера 2: " + err.message); }
+    setPosterLoading2(false);
+  }
+
+  async function publishAll() {
+    await publish();
+    await new Promise(r => setTimeout(r, 2000));
+    await publish2();
+    await new Promise(r => setTimeout(r, 2000));
+    await publish3();
   }
 
   function copyText() {
@@ -613,14 +763,35 @@ export default function App() {
 
       {/* ACTIONS */}
       {allDone && !showPreview && (
-        <div style={{ padding: "16px 24px", maxWidth: 960, margin: "0 auto", display: "flex", gap: 10, flexWrap: "wrap" }}>
-          {openaiKey && (
-            <button onClick={genPoster} disabled={posterLoading} style={{ background: posterLoading ? "#95a5a6" : "#27ae60", color: "#fff", border: "none", borderRadius: 8, padding: "11px 20px", fontSize: 13, fontWeight: 600, cursor: posterLoading ? "not-allowed" : "pointer" }}>
-              {posterLoading ? "⟳ Создаю постер..." : "🎨 Создать постер"}
+        <div style={{ padding: "16px 24px", maxWidth: 960, margin: "0 auto" }}>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+            <button onClick={openPreview} style={{ background: "#f39c12", color: "#fff", border: "none", borderRadius: 8, padding: "11px 20px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+              👁 Предпросмотр 3 постов
             </button>
+            <button onClick={download} style={{ background: "#fff", color: "#555", border: "1.5px solid #d0d0d0", borderRadius: 8, padding: "11px 20px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+              ↓ Скачать отчёт
+            </button>
+          </div>
+          {openaiKey && (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button onClick={genPoster} disabled={posterLoading}
+                style={{ background: posterLoading ? "#95a5a6" : posterUrl ? "#27ae60" : "#2ecc71", color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 12, fontWeight: 600, cursor: posterLoading ? "not-allowed" : "pointer" }}>
+                {posterLoading ? "⟳ Постер 1..." : posterUrl ? "✓ Постер 1 готов" : "🎨 Постер 1 · Тизер"}
+              </button>
+              <button onClick={genPoster2} disabled={posterLoading2}
+                style={{ background: posterLoading2 ? "#95a5a6" : posterUrl2 ? "#27ae60" : "#2ecc71", color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 12, fontWeight: 600, cursor: posterLoading2 ? "not-allowed" : "pointer" }}>
+                {posterLoading2 ? "⟳ Постер 2..." : posterUrl2 ? "✓ Постер 2 готов" : "🎨 Постер 2 · Анализ"}
+              </button>
+              <button onClick={genPoster3} disabled={posterLoading3}
+                style={{ background: posterLoading3 ? "#95a5a6" : posterUrl3 ? "#27ae60" : "#2ecc71", color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 12, fontWeight: 600, cursor: posterLoading3 ? "not-allowed" : "pointer" }}>
+                {posterLoading3 ? "⟳ Постер 3..." : posterUrl3 ? "✓ Постер 3 готов" : "🎨 Постер 3 · Стратегия"}
+              </button>
+              <button onClick={genAllPosters} disabled={posterLoading || posterLoading2 || posterLoading3}
+                style={{ background: "linear-gradient(135deg,#8b5e08,#c8a030)", color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                🎨 Создать все 3 постера
+              </button>
+            </div>
           )}
-          <button onClick={openPreview} style={{ background: "#f39c12", color: "#fff", border: "none", borderRadius: 8, padding: "11px 20px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>👁 Предпросмотр поста</button>
-          <button onClick={download} style={{ background: "#fff", color: "#555", border: "1.5px solid #d0d0d0", borderRadius: 8, padding: "11px 20px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>↓ Скачать отчёт</button>
         </div>
       )}
 
@@ -641,51 +812,169 @@ export default function App() {
         </div>
       )}
 
-      {/* PREVIEW */}
+      {/* PREVIEW - 3 POSTS */}
       {showPreview && (
         <div style={{ padding: "0 24px 24px", maxWidth: 960, margin: "0 auto" }}>
           <div style={{ background: "#fff", border: "2px solid #f39c12", borderRadius: 12, overflow: "hidden" }}>
+
+            {/* Header */}
             <div style={{ background: "#f39c12", padding: "12px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: "#fff" }}>👁 Предпросмотр · @OKI_invest</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#fff" }}>👁 Предпросмотр · @OKI_invest · 3 поста</div>
               <button onClick={() => setShowPreview(false)} style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", width: 28, height: 28, borderRadius: 6, cursor: "pointer", fontSize: 16 }}>✕</button>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: posterUrl ? "220px 1fr" : "1fr" }}>
-              {posterUrl && (
-                <div style={{ padding: 16, borderRight: "1px solid #f0f0f0", background: "#fafafa" }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 8 }}>ПОСТЕР</div>
-                  <img src={posterUrl} alt="poster" style={{ width: "100%", borderRadius: 8 }} />
-                </div>
-              )}
-              <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 12 }}>
-                <div>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 8 }}>ТЕКСТ — РЕДАКТИРУЙ ПЕРЕД ПУБЛИКАЦИЕЙ</div>
-                  <textarea value={editablePost} onChange={e => setEditablePost(e.target.value)}
-                    style={{ width: "100%", minHeight: 420, border: "1.5px solid #d0d0d0", borderRadius: 8, padding: 14, fontSize: 13, fontFamily: "system-ui", lineHeight: 1.7, resize: "vertical", outline: "none", boxSizing: "border-box" }} />
-                  <div style={{ fontSize: 11, color: "#aaa", textAlign: "right", marginTop: 4 }}>{editablePost.length} символов</div>
-                </div>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  {tgToken ? (
-                    <button onClick={publish} disabled={tgStatus === "sending" || tgStatus === "sent"}
-                      style={{ flex: 1, background: tgStatus === "sent" ? "#27ae60" : tgStatus === "error" ? "#e74c3c" : "#0088cc", color: "#fff", border: "none", borderRadius: 8, padding: "11px 16px", fontSize: 13, fontWeight: 700, cursor: tgStatus === "sending" || tgStatus === "sent" ? "not-allowed" : "pointer" }}>
-                      {tgStatus === "sent" ? "✓ Опубликовано в @OKI_invest" : tgStatus === "sending" ? "⟳ Публикую..." : tgStatus === "error" ? "✗ Ошибка" : "✈️ Опубликовать в @OKI_invest"}
+
+            {/* Post tabs */}
+            <div style={{ display: "flex", borderBottom: "1px solid #f0f0f0", background: "#fafafa" }}>
+              {[
+                { num: 1, label: "Пост 1 · Крючок", desc: "с постером" },
+                { num: 2, label: "Пост 2 · Анализ", desc: "текст" },
+                { num: 3, label: "Пост 3 · Стратегия", desc: "опции" },
+              ].map(tab => (
+                <button key={tab.num} onClick={() => setActivePostTab(tab.num)}
+                  style={{ flex: 1, padding: "12px 8px", border: "none", borderBottom: activePostTab === tab.num ? "3px solid #f39c12" : "3px solid transparent", background: "transparent", cursor: "pointer", fontSize: 12, fontWeight: activePostTab === tab.num ? 700 : 500, color: activePostTab === tab.num ? "#f39c12" : "#888" }}>
+                  {tab.label}
+                  <div style={{ fontSize: 10, color: "#aaa", marginTop: 2 }}>{tab.desc}</div>
+                </button>
+              ))}
+            </div>
+
+            {/* Post 1 */}
+            {activePostTab === 1 && (
+              <div style={{ display: "grid", gridTemplateColumns: posterUrl ? "220px 1fr" : "1fr" }}>
+                {posterUrl && (
+                  <div style={{ padding: 16, borderRight: "1px solid #f0f0f0", background: "#fafafa" }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 8 }}>ПОСТЕР 1 · ТИЗЕР</div>
+                    <img src={posterUrl} alt="poster" style={{ width: "100%", borderRadius: 8 }} />
+                  </div>
+                )}
+                {!posterUrl && openaiKey && (
+                  <div style={{ padding: 16, borderRight: "1px solid #f0f0f0", background: "#fafafa", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <button onClick={genPoster} disabled={posterLoading}
+                      style={{ background: posterLoading ? "#95a5a6" : "#27ae60", color: "#fff", border: "none", borderRadius: 8, padding: "12px 16px", fontSize: 12, cursor: "pointer", fontWeight: 600 }}>
+                      {posterLoading ? "⟳ Создаю постер 1..." : "🎨 Создать постер 1"}
                     </button>
-                  ) : (
-                    <div style={{ flex: 1, background: "#fff3cd", border: "1px solid #ffc107", borderRadius: 8, padding: "11px 16px", fontSize: 12, color: "#856404", textAlign: "center" }}>⚠️ Добавь Telegram токен в Настройки</div>
-                  )}
-                  <button onClick={copyText} style={{ background: copied ? "#27ae60" : "#fff", color: copied ? "#fff" : "#555", border: "1.5px solid " + (copied ? "#27ae60" : "#d0d0d0"), borderRadius: 8, padding: "11px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", minWidth: 110 }}>
-                    {copied ? "✓ Скопировано!" : "⎘ Копировать текст"}
+                  </div>
+                )}
+                <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div style={{ fontSize: 11, color: "#888", fontWeight: 700 }}>КРЮЧОК — caption к постеру (до 1024 символов)</div>
+                  <textarea value={editablePost} onChange={e => setEditablePost(e.target.value)}
+                    style={{ width: "100%", minHeight: 300, border: "1.5px solid #d0d0d0", borderRadius: 8, padding: 14, fontSize: 13, fontFamily: "system-ui", lineHeight: 1.7, resize: "vertical", outline: "none", boxSizing: "border-box",
+                      borderColor: editablePost.length > 1024 ? "#e74c3c" : "#d0d0d0" }} />
+                  <div style={{ fontSize: 11, textAlign: "right", color: editablePost.length > 1024 ? "#e74c3c" : "#aaa", fontWeight: editablePost.length > 1024 ? 700 : 400 }}>
+                    {editablePost.length}/1024 {editablePost.length > 1024 ? "⚠️ ПРЕВЫШЕН ЛИМИТ" : ""}
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    {tgToken ? (
+                      <button onClick={publish} disabled={tgStatus === "sending" || tgStatus === "sent"}
+                        style={{ flex: 1, background: tgStatus === "sent" ? "#27ae60" : "#0088cc", color: "#fff", border: "none", borderRadius: 8, padding: "10px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                        {tgStatus === "sent" ? "✓ Опубликован" : tgStatus === "sending" ? "⟳ Публикую..." : "✈️ Опубликовать пост 1"}
+                      </button>
+                    ) : <div style={{ flex: 1, background: "#fff3cd", border: "1px solid #ffc107", borderRadius: 8, padding: "10px", fontSize: 12, color: "#856404", textAlign: "center" }}>⚠️ Добавь токен Telegram</div>}
+                    <button onClick={() => { navigator.clipboard?.writeText(editablePost); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
+                      style={{ background: copied ? "#27ae60" : "#fff", color: copied ? "#fff" : "#555", border: "1.5px solid #d0d0d0", borderRadius: 8, padding: "10px 14px", fontSize: 12, cursor: "pointer" }}>
+                      {copied ? "✓" : "⎘"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Post 2 */}
+            {activePostTab === 2 && (
+              <div style={{ display: "grid", gridTemplateColumns: posterUrl2 ? "220px 1fr" : "1fr" }}>
+                {posterUrl2 && (
+                  <div style={{ padding: 16, borderRight: "1px solid #f0f0f0", background: "#fafafa" }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 8 }}>ПОСТЕР 2 · АНАЛИЗ</div>
+                    <img src={posterUrl2} alt="poster2" style={{ width: "100%", borderRadius: 8 }} />
+                  </div>
+                )}
+              <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 10 }}>
+                <div style={{ fontSize: 11, color: "#888", fontWeight: 700 }}>ГЛУБОКИЙ АНАЛИЗ — текстовый пост (до 4096 символов)</div>
+                <textarea value={editablePost2} onChange={e => setEditablePost2(e.target.value)}
+                  style={{ width: "100%", minHeight: 420, border: "1.5px solid #d0d0d0", borderRadius: 8, padding: 14, fontSize: 13, fontFamily: "system-ui", lineHeight: 1.7, resize: "vertical", outline: "none", boxSizing: "border-box",
+                    borderColor: editablePost2.length > 4096 ? "#e74c3c" : "#d0d0d0" }} />
+                <div style={{ fontSize: 11, textAlign: "right", color: editablePost2.length > 4096 ? "#e74c3c" : "#aaa", fontWeight: editablePost2.length > 4096 ? 700 : 400 }}>
+                  {editablePost2.length}/4096 {editablePost2.length > 4096 ? "⚠️ ПРЕВЫШЕН ЛИМИТ" : ""}
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  {tgToken ? (
+                    <button onClick={publish2} disabled={tgStatus2 === "sending" || tgStatus2 === "sent"}
+                      style={{ flex: 1, background: tgStatus2 === "sent" ? "#27ae60" : "#0088cc", color: "#fff", border: "none", borderRadius: 8, padding: "10px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                      {tgStatus2 === "sent" ? "✓ Опубликован" : tgStatus2 === "sending" ? "⟳ Публикую..." : "✈️ Опубликовать пост 2"}
+                    </button>
+                  ) : <div style={{ flex: 1, background: "#fff3cd", border: "1px solid #ffc107", borderRadius: 8, padding: "10px", fontSize: 12, color: "#856404", textAlign: "center" }}>⚠️ Добавь токен Telegram</div>}
+                  <button onClick={() => { navigator.clipboard?.writeText(editablePost2); setCopied2(true); setTimeout(() => setCopied2(false), 2000); }}
+                    style={{ background: copied2 ? "#27ae60" : "#fff", color: copied2 ? "#fff" : "#555", border: "1.5px solid #d0d0d0", borderRadius: 8, padding: "10px 14px", fontSize: 12, cursor: "pointer" }}>
+                    {copied2 ? "✓" : "⎘"}
                   </button>
                 </div>
-                {tgStatus === "sent" && (
-                  <div style={{ background: "#d4edda", border: "1px solid #c3e6cb", borderRadius: 8, padding: "10px 14px", fontSize: 13, color: "#155724", textAlign: "center", fontWeight: 600 }}>✓ Пост опубликован в @OKI_invest</div>
-                )}
               </div>
-            </div>
+              </div>
+            )}
+
+            {/* Post 3 */}
+            {activePostTab === 3 && (
+              <div style={{ display: "grid", gridTemplateColumns: posterUrl3 ? "220px 1fr" : "1fr" }}>
+                {posterUrl3 && (
+                  <div style={{ padding: 16, borderRight: "1px solid #f0f0f0", background: "#fafafa" }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 8 }}>ПОСТЕР 3 · СТРАТЕГИЯ</div>
+                    <img src={posterUrl3} alt="poster3" style={{ width: "100%", borderRadius: 8 }} />
+                  </div>
+                )}
+                <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <div style={{ fontSize: 11, color: "#888", fontWeight: 700 }}>СТРАТЕГИЯ — с опциональным постером (до 4096 символов)</div>
+                    {openaiKey && !posterUrl3 && (
+                      <button onClick={genPoster3} disabled={posterLoading3}
+                        style={{ background: posterLoading3 ? "#95a5a6" : "#27ae60", color: "#fff", border: "none", borderRadius: 6, padding: "6px 12px", fontSize: 11, cursor: "pointer" }}>
+                        {posterLoading3 ? "⟳ Создаю..." : "🎨 Постер 3"}
+                      </button>
+                    )}
+                  </div>
+                  <textarea value={editablePost3} onChange={e => setEditablePost3(e.target.value)}
+                    style={{ width: "100%", minHeight: 380, border: "1.5px solid #d0d0d0", borderRadius: 8, padding: 14, fontSize: 13, fontFamily: "system-ui", lineHeight: 1.7, resize: "vertical", outline: "none", boxSizing: "border-box",
+                      borderColor: editablePost3.length > 4096 ? "#e74c3c" : "#d0d0d0" }} />
+                  <div style={{ fontSize: 11, textAlign: "right", color: editablePost3.length > 4096 ? "#e74c3c" : "#aaa", fontWeight: editablePost3.length > 4096 ? 700 : 400 }}>
+                    {editablePost3.length}/4096 {editablePost3.length > 4096 ? "⚠️ ПРЕВЫШЕН ЛИМИТ" : ""}
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    {tgToken ? (
+                      <button onClick={publish3} disabled={tgStatus3 === "sending" || tgStatus3 === "sent"}
+                        style={{ flex: 1, background: tgStatus3 === "sent" ? "#27ae60" : "#0088cc", color: "#fff", border: "none", borderRadius: 8, padding: "10px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                        {tgStatus3 === "sent" ? "✓ Опубликован" : tgStatus3 === "sending" ? "⟳ Публикую..." : "✈️ Опубликовать пост 3"}
+                      </button>
+                    ) : <div style={{ flex: 1, background: "#fff3cd", border: "1px solid #ffc107", borderRadius: 8, padding: "10px", fontSize: 12, color: "#856404", textAlign: "center" }}>⚠️ Добавь токен Telegram</div>}
+                    <button onClick={() => { navigator.clipboard?.writeText(editablePost3); setCopied3(true); setTimeout(() => setCopied3(false), 2000); }}
+                      style={{ background: copied3 ? "#27ae60" : "#fff", color: copied3 ? "#fff" : "#555", border: "1.5px solid #d0d0d0", borderRadius: 8, padding: "10px 14px", fontSize: 12, cursor: "pointer" }}>
+                      {copied3 ? "✓" : "⎘"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Publish all button */}
+            {tgToken && (tgStatus === "sent" || tgStatus2 === "sent" || tgStatus3 === "sent") && (
+              <div style={{ padding: "12px 20px", borderTop: "1px solid #f0f0f0", display: "flex", gap: 8, background: "#fafafa" }}>
+                <div style={{ fontSize: 12, color: "#27ae60", fontWeight: 600 }}>
+                  {[tgStatus === "sent" && "Пост 1 ✓", tgStatus2 === "sent" && "Пост 2 ✓", tgStatus3 === "sent" && "Пост 3 ✓"].filter(Boolean).join(" · ")}
+                </div>
+              </div>
+            )}
+
+            {tgToken && tgStatus !== "sent" && tgStatus2 !== "sent" && tgStatus3 !== "sent" && (
+              <div style={{ padding: "12px 20px", borderTop: "1px solid #f0f0f0", background: "#fafafa" }}>
+                <button onClick={publishAll}
+                  style={{ width: "100%", background: "linear-gradient(135deg, #1a1a2e, #2a2a5e)", color: "#ffd700", border: "none", borderRadius: 8, padding: "12px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                  🚀 Опубликовать все 3 поста подряд
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
 
-      {/* ENGINE GRID */}
+            {/* ENGINE GRID */}
       {Object.keys(statuses).length > 0 && (
         <div style={{ padding: "0 24px 32px", maxWidth: 960, margin: "0 auto" }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 8 }}>
