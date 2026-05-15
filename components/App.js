@@ -600,7 +600,7 @@ ${brief}`;
     setTgStatus("sending");
     setAppError(null);
     try {
-      const body = { token: tgToken, chatId: tgChatId, text: cleanForTelegram(editablePost) };
+      const body = { token: tgToken, chatId: tgChatId, text: cleanForTelegram(editablePost), noMarkdown: true };
       if (posterUrl && posterUrl.startsWith("data:")) {
         body.imageBase64 = posterUrl.split(",")[1];
       }
@@ -623,7 +623,8 @@ ${brief}`;
     if (!tgToken || !tgChatId) return;
     setTgStatus2("sending");
     try {
-      const body2 = { token: tgToken, chatId: tgChatId, text: cleanForTelegram(editablePost2) };
+      const cleanText = cleanForTelegram(editablePost2);
+      const body2 = { token: tgToken, chatId: tgChatId, text: cleanText, noMarkdown: true };
       if (posterUrl2 && posterUrl2.startsWith("data:")) {
         body2.imageBase64 = posterUrl2.split(",")[1];
       }
@@ -641,7 +642,7 @@ ${brief}`;
     if (!tgToken || !tgChatId) return;
     setTgStatus3("sending");
     try {
-      const body3 = { token: tgToken, chatId: tgChatId, text: cleanForTelegram(editablePost3) };
+      const body3 = { token: tgToken, chatId: tgChatId, text: cleanForTelegram(editablePost3), noMarkdown: true };
       if (posterUrl3 && posterUrl3.startsWith("data:")) {
         body3.imageBase64 = posterUrl3.split(",")[1];
       }
