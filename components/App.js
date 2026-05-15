@@ -230,31 +230,34 @@ ${ctx.slice(0, 5000)}
 function cleanForTelegram(text) {
   if (typeof text !== "string") return "";
   var s = text;
-  // Remove ** bold markers
   s = s.split("**").join("");
-  // Remove single * italic markers  
   s = s.split("*").join("");
-  // Remove # headers
-  s = s.replace(/^#{1,6} /gm, "");
-  // Remove backticks
-  s = s.split("`").join("");
-  // Remove underscores pairs
   s = s.split("__").join("");
-  // Remove triple dashes
-  s = s.replace(/^---+$/gm, "");
-  // Remove invisible unicode
-  s = s.replace(/⠀/g, "");
-  s = s.replace(/⁠/g, "");
-  s = s.replace(/​/g, "");
-  s = s.replace(/ /g, " ");
-  // Remove markdown links - replace [text](url) with text
-  var linkRe = /[([^]]*)]([^)]*)/g;
-  s = s.replace(linkRe, "$1");
+  s = s.split("_").join("_");
+  // backtick removal skipped
+  s = s.split("---").join("");
+  // Remove # headers - line by line
+  s = s.split("\n").map(function(line) {
+    if (line.startsWith("# ") || line.startsWith("## ") || line.startsWith("### ")) {
+      return line.replace(/^#+\s/, "");
+    }
+    return line;
+  }).join("\n");
+  // Remove markdown links [text](url) -> text
+  var i = s.indexOf("](");
+  while (i >= 0) {
+    var openBracket = s.lastIndexOf("[", i);
+    var closeParenIdx = s.indexOf(")", i);
+    if (openBracket >= 0 && closeParenIdx >= 0) {
+      var linkText = s.slice(openBracket + 1, i);
+      s = s.slice(0, openBracket) + linkText + s.slice(closeParenIdx + 1);
+      i = s.indexOf("](");
+    } else break;
+  }
   // Clean extra blank lines
-  s = s.replace(/
-{3,}/g, "
-
-");
+  while (s.indexOf("\n\n\n") >= 0) {
+    s = s.split("\n\n\n").join("\n\n");
+  }
   return s.trim();
 }
 
