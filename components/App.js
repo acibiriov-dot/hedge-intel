@@ -461,37 +461,80 @@ export default function App() {
 
   async function genPoster() {
     const t = ticker.toUpperCase();
-    const brief = editablePost.slice(0, 600);
-    const prompt = "Создай постер в стиле комиксов Марвел для Telegram-канала об аналитике компаний. " +
-      "Стиль: яркие цвета, жирные контуры, динамичные иллюстрации, заголовки как в комиксах Марвел, несколько панелей с текстом и картинками. " +
-      "Весь текст на постере строго на русском языке. " +
-      "Структура: крупный заголовок вверху с названием " + t + ", 4-5 панелей комикса где каждая иллюстрирует один факт, итоговая строка внизу. " +
-      "Логотип @OKI_invest в углу. " +
-      "Текст для иллюстрирования: " + brief;
+    const brief = editablePost.slice(0, 700);
+    const prompt = `Editorial comic book infographic poster in dark dramatic style.
+
+EXACT STYLE TO REPRODUCE:
+- Dark background with high-contrast vivid illustrations
+- Realistic detailed comic art (not cartoon) — like graphic novel editorial
+- Large bold Russian title at top with colored highlight blocks (red/yellow)
+- Main hero figure: confident businessman/analyst in dramatic pose dominating top section
+- Structured information panels below with section headers in bold
+- Each panel has detailed scene illustration + Russian text caption
+- Small readable Russian text in info panels
+- Dramatic lighting, space/financial district backgrounds
+- Bottom section: bold conclusion in large text with dramatic framing
+- Overall feels like a professional editorial comic magazine spread
+- Aspect ratio: tall vertical poster
+
+POSTER SUBJECT: ${t} company — teasер post
+Create main character as confident analyst/investor discovering ${t}
+Top section: dramatic reveal of the company
+Middle panels: 3-4 key facts with illustrations
+Bottom: bold conclusion
+
+ALL TEXT MUST BE IN RUSSIAN. Watermark @OKI_invest bottom corner.
+
+KEY FACTS TO ILLUSTRATE:
+${brief}`;
     await buildPoster(prompt, setPosterUrl, setPosterLoading);
   }
 
   async function genPoster2() {
     const t = ticker.toUpperCase();
-    const brief = editablePost2.slice(0, 600);
-    const prompt = "Создай аналитический постер в стиле комиксов Марвел для Telegram-канала об аналитике компаний. " +
-      "Стиль: синие и золотые тона, жирные контуры, панели с данными и графиками, профессиональный вид. " +
-      "Весь текст на постере строго на русском языке. " +
-      "Структура: заголовок РАЗБОР " + t + " вверху, 4-5 панелей с ключевыми данными и сценариями, вывод внизу. " +
-      "Логотип @OKI_invest в углу. " +
-      "Текст для иллюстрирования: " + brief;
+    const brief = editablePost2.slice(0, 700);
+    const prompt = `Editorial comic book infographic poster in dark dramatic style.
+
+EXACT STYLE TO REPRODUCE:
+- Dark background with high-contrast vivid illustrations
+- Realistic detailed comic art (not cartoon) — like graphic novel editorial
+- Large bold Russian title at top: "АНАЛИЗ: ${t}" with colored highlight blocks
+- Main hero: analyst with magnifying glass studying financial data
+- Structured panels: ФИНАНСЫ, ИНСТИТУЦИОНАЛЫ, СЦЕНАРИИ sections with headers
+- Each panel has detailed scene + readable Russian text
+- Bull vs bear battle scene, institutional buildings, probability chart
+- Bottom: bold verdict in large Russian text
+- Professional editorial comic magazine style
+- Tall vertical poster format
+
+ALL TEXT IN RUSSIAN. Watermark @OKI_invest bottom corner.
+
+KEY FACTS TO ILLUSTRATE:
+${brief}`;
     await buildPoster(prompt, setPosterUrl2, setPosterLoading2);
   }
 
   async function genPoster3() {
     const t = ticker.toUpperCase();
-    const brief = editablePost3.slice(0, 600);
-    const prompt = "Создай постер в стиле комиксов Марвел для Telegram-канала об аналитике компаний. Тема: уровни и точки входа по " + t + ". " +
-      "Стиль: зелёные и золотые тона, жирные контуры, энергичные иллюстрации, панели комикса. " +
-      "Весь текст на постере строго на русском языке. " +
-      "Структура: заголовок СТРАТЕГИЯ " + t + " вверху, 4-5 панелей с уровнями и точками входа, итоговый вывод внизу. " +
-      "Логотип @OKI_invest в углу. " +
-      "Текст для иллюстрирования: " + brief;
+    const brief = editablePost3.slice(0, 700);
+    const prompt = `Editorial comic book infographic poster in dark dramatic style.
+
+EXACT STYLE TO REPRODUCE:
+- Dark background with high-contrast vivid illustrations  
+- Realistic detailed comic art (not cartoon) — like graphic novel editorial
+- Large bold Russian title at top: "СТРАТЕГИЯ: ${t}" with green/gold highlight blocks
+- Main hero: confident trader executing strategy in dramatic pose
+- Structured panels: ТЕХНИЧЕСКИЙ АНАЛИЗ, СТРАТЕГИЯ 1, СТРАТЕГИЯ 2, ИТОГ sections
+- Price levels shown as targets with arrows, options as power-up items
+- Detailed financial chart illustrations with support/resistance levels
+- Bottom: bold call-to-action in large Russian text
+- Professional editorial comic magazine style
+- Tall vertical poster format
+
+ALL TEXT IN RUSSIAN. Watermark @OKI_invest bottom corner.
+
+KEY FACTS TO ILLUSTRATE:
+${brief}`;
     await buildPoster(prompt, setPosterUrl3, setPosterLoading3);
   }
 
