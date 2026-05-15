@@ -1,92 +1,98 @@
 export async function POST(request) {
   try {
-    const { token, chatId, text, imageBase64 } = await request.json();
+    const body = await request.json();
+    const token = body.token;
+    const chatId = body.chatId;
+    const text = body.text;
+    const imageBase64 = body.imageBase64;
 
     if (!token || !chatId || !text) {
-      return Response.json({ error: "Missing required fields" }, { status: 400 });
+      return Response.json({ error: "Missing fields" }, { status: 400 });
     }
 
-    // Aggressive clean - keep only safe characters
-    let s = text;
-    
-    // Step 1: Remove all markdown
+    // Clean text step by step
+    var s = String(text);
     s = s.split("**").join("");
     s = s.split("__").join("");
-    s = s.split("\\_").join("_");
-    s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1 $2");
-    s = s.replace(/^#{1,6} /gm, "");
-    s = s.replace(/^-{3,}$/gm, "");
-    
-    // Step 2: Remove/replace special unicode
-    s = s.split("→").join("->");
-    s = s.split("←").join("<-");
-    s = s.split("↓").join("v");
-    s = s.split("↑").join("^");
-    s = s.split("·").join(".");
-    s = s.split("—").join("-");
-    s = s.split("–").join("-");
-    s = s.split(""").join('"');
-    s = s.split(""").join('"');
-    s = s.split("'").join("'");
-    s = s.split("'").join("'");
-    s = s.split("…").join("...");
-    
-    // Step 3: Remove invisible chars
-    s = s.replace(/[\u2800\u2060\u200b\u200c\u200d\u00a0\ufeff]/g, "");
-    
-    // Step 4: Remove * entirely (italic)
     s = s.split("*").join("");
-    
-    // Step 5: Clean DYOR
-    s = s.split("DYOR").join("");
-    
-    // Step 6: Remove backticks
     s = s.split("`").join("");
+    s = s.split("---").join("");
+    s = s.split("\n---\n").join("\n");
+    s = s.split("DYOR").join("");
+    s = s.split("\u2800").join("");
+    s = s.split("\u200b").join("");
+    s = s.split("\u00a0").join(" ");
+    s = s.split("\u2014").join("-");
+    s = s.split("\u2013").join("-");
+    s = s.split("\u2192").join("->");
+    s = s.split("\u2190").join("<-");
+    s = s.split("\u2193").join("");
+    s = s.split("\u2191").join("");
+    s = s.split("\\_").join("_");
     
-    // Step 7: Clean extra whitespace
-    s = s.replace(/\n{3,}/g, "\n\n");
+    // Remove markdown links manually
+    var linkStart = s.indexOf("](");
+    while (linkStart >= 0) {
+      var openBracket = s.lastIndexOf("[", linkStart);
+      var closeParen = s.indexOf(")", linkStart);
+      if (openBracket >= 0 && closeParen >= 0) {
+        var linkText = s.slice(openBracket + 1, linkStart);
+        s = s.slice(0, openBracket) + linkText + s.slice(closeParen + 1);
+      } else {
+        break;
+      }
+      linkStart = s.indexOf("](");
+    }
+    
+    // Remove # headers
+    var lines = s.split("\n");
+    lines = lines.map(function(line) {
+      if (line.indexOf("# ") === 0) return line.slice(line.indexOf("# ") + 2);
+      if (line.indexOf("## ") === 0) return line.slice(3);
+      if (line.indexOf("### ") === 0) return line.slice(4);
+      return line;
+    });
+    s = lines.join("\n");
+    
+    // Clean multiple newlines
+    while (s.indexOf("\n\n\n") >= 0) {
+      s = s.split("\n\n\n").join("\n\n");
+    }
     s = s.trim();
 
-    // Log first 200 chars for debugging
-    console.log("Sending to TG, length:", s.length, "preview:", s.slice(0, 100));
-
     if (imageBase64) {
-      const imgBuffer = Buffer.from(imageBase64, "base64");
-      const caption = s.slice(0, 1024);
-
-      const formData = new FormData();
-      const blob = new Blob([imgBuffer], { type: "image/png" });
+      var imgBuffer = Buffer.from(imageBase64, "base64");
+      var caption = s.slice(0, 1024);
+      var formData = new FormData();
+      var blob = new Blob([imgBuffer], { type: "image/png" });
       formData.append("chat_id", chatId);
       formData.append("photo", blob, "poster.png");
       formData.append("caption", caption);
 
-      const res = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
+      var photoRes = await fetch("https://api.telegram.org/bot" + token + "/sendPhoto", {
         method: "POST",
         body: formData,
       });
-      const data = await res.json();
-      if (!data.ok) {
-        console.log("TG photo error:", data.description, "caption:", caption.slice(0, 50));
-        return Response.json({ error: data.description }, { status: 400 });
+      var photoData = await photoRes.json();
+      if (!photoData.ok) {
+        return Response.json({ error: photoData.description }, { status: 400 });
       }
 
       if (s.length > 1024) {
-        const rest = s.slice(1024);
-        await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        await fetch("https://api.telegram.org/bot" + token + "/sendMessage", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             chat_id: chatId,
-            text: rest,
+            text: s.slice(1024),
             disable_web_page_preview: true,
           }),
         });
       }
-
       return Response.json({ ok: true });
     }
 
-    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    var msgRes = await fetch("https://api.telegram.org/bot" + token + "/sendMessage", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -95,15 +101,13 @@ export async function POST(request) {
         disable_web_page_preview: true,
       }),
     });
-
-    const data = await res.json();
-    if (!data.ok) {
-      console.log("TG text error:", data.description, "text start:", s.slice(0, 100));
-      return Response.json({ error: data.description + " | text_start: " + s.slice(0, 50) }, { status: 400 });
+    var msgData = await msgRes.json();
+    if (!msgData.ok) {
+      return Response.json({ error: msgData.description }, { status: 400 });
     }
     return Response.json({ ok: true });
 
   } catch (err) {
-    return Response.json({ error: err.message || "Server error" }, { status: 500 });
+    return Response.json({ error: String(err.message) }, { status: 500 });
   }
 }
