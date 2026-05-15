@@ -10,27 +10,23 @@ export async function POST(request) {
       return Response.json({ error: "Missing fields" }, { status: 400 });
     }
 
-    // Clean text step by step
     var s = String(text);
     s = s.split("**").join("");
     s = s.split("__").join("");
     s = s.split("*").join("");
-    s = s.split("`").join("");
     s = s.split("---").join("");
-    s = s.split("\n---\n").join("\n");
     s = s.split("DYOR").join("");
-    s = s.split("\u2800").join("");
-    s = s.split("\u200b").join("");
-    s = s.split("\u00a0").join(" ");
-    s = s.split("\u2014").join("-");
-    s = s.split("\u2013").join("-");
-    s = s.split("\u2192").join("->");
-    s = s.split("\u2190").join("<-");
-    s = s.split("\u2193").join("");
-    s = s.split("\u2191").join("");
+    s = s.split("⠀").join("");
+    s = s.split("​").join("");
+    s = s.split(" ").join(" ");
+    s = s.split("—").join("-");
+    s = s.split("–").join("-");
+    s = s.split("→").join("->");
+    s = s.split("←").join("<-");
+    s = s.split("↓").join("");
+    s = s.split("↑").join("");
     s = s.split("\\_").join("_");
-    
-    // Remove markdown links manually
+
     var linkStart = s.indexOf("](");
     while (linkStart >= 0) {
       var openBracket = s.lastIndexOf("[", linkStart);
@@ -38,23 +34,22 @@ export async function POST(request) {
       if (openBracket >= 0 && closeParen >= 0) {
         var linkText = s.slice(openBracket + 1, linkStart);
         s = s.slice(0, openBracket) + linkText + s.slice(closeParen + 1);
+        linkStart = s.indexOf("](");
       } else {
         break;
       }
-      linkStart = s.indexOf("](");
     }
-    
-    // Remove # headers
+
     var lines = s.split("\n");
     lines = lines.map(function(line) {
-      if (line.indexOf("# ") === 0) return line.slice(line.indexOf("# ") + 2);
-      if (line.indexOf("## ") === 0) return line.slice(3);
-      if (line.indexOf("### ") === 0) return line.slice(4);
+      var trimmed = line.trimStart();
+      if (trimmed.startsWith("### ")) return trimmed.slice(4);
+      if (trimmed.startsWith("## ")) return trimmed.slice(3);
+      if (trimmed.startsWith("# ")) return trimmed.slice(2);
       return line;
     });
     s = lines.join("\n");
-    
-    // Clean multiple newlines
+
     while (s.indexOf("\n\n\n") >= 0) {
       s = s.split("\n\n\n").join("\n\n");
     }
@@ -62,7 +57,11 @@ export async function POST(request) {
 
     if (imageBase64) {
       var imgBuffer = Buffer.from(imageBase64, "base64");
+      
+      // Send ONLY as photo with caption - no separate text message
+      // Caption limit is 1024 chars, truncate if needed
       var caption = s.slice(0, 1024);
+      
       var formData = new FormData();
       var blob = new Blob([imgBuffer], { type: "image/png" });
       formData.append("chat_id", chatId);
@@ -77,21 +76,31 @@ export async function POST(request) {
       if (!photoData.ok) {
         return Response.json({ error: photoData.description }, { status: 400 });
       }
-
+      
+      // If text longer than 1024, send remainder as separate message
       if (s.length > 1024) {
-        await fetch("https://api.telegram.org/bot" + token + "/sendMessage", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            chat_id: chatId,
-            text: s.slice(1024),
-            disable_web_page_preview: true,
-          }),
-        });
+        var rest = s.slice(1024).trim();
+        if (rest.length > 0) {
+          var restRes = await fetch("https://api.telegram.org/bot" + token + "/sendMessage", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              chat_id: chatId,
+              text: rest,
+              disable_web_page_preview: true,
+            }),
+          });
+          var restData = await restRes.json();
+          if (!restData.ok) {
+            return Response.json({ error: restData.description }, { status: 400 });
+          }
+        }
       }
+      
       return Response.json({ ok: true });
     }
 
+    // Text only
     var msgRes = await fetch("https://api.telegram.org/bot" + token + "/sendMessage", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
