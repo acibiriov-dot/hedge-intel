@@ -373,6 +373,8 @@ export default function App() {
 
       if (!abortRef.current.signal.aborted) {
         const tgEng = ENGINES[9];
+        setPhase("Пауза перед созданием поста...");
+        await sleep(15000);
         setPhase("Создаю Telegram пост...");
         setStatuses(p => ({ ...p, [tgEng.id]: "running" }));
         setActiveTab(tgEng.id);
