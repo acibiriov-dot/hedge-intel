@@ -2,16 +2,16 @@
 import { useState, useRef } from "react";
 
 const ENGINES = [
-  { id: "core",        num: "01", label: "Core Intelligence",  icon: "⚡" },
-  { id: "ticker",      num: "02", label: "Ticker Analysis",    icon: "📊" },
-  { id: "technical",   num: "03", label: "Technical Engine",   icon: "📈" },
-  { id: "options",     num: "04", label: "Options & Flow",     icon: "🎯" },
-  { id: "smartmoney",  num: "05", label: "Smart Money",        icon: "🏦" },
-  { id: "intermarket", num: "06", label: "Intermarket",        icon: "🌐" },
-  { id: "altdata",     num: "07", label: "Alternative Data",   icon: "🔍" },
-  { id: "probability", num: "08", label: "Probability Model",  icon: "🎲" },
-  { id: "narrative",   num: "09", label: "Narrative Velocity", icon: "📡" },
-  { id: "telegram",    num: "10", label: "Telegram Alpha",     icon: "✈️" },
+  { id: "core",        num: "01", label: "Основной анализ",  icon: "⚡" },
+  { id: "ticker",      num: "02", label: "Анализ тикера",    icon: "📊" },
+  { id: "technical",   num: "03", label: "Технический анализ",   icon: "📈" },
+  { id: "options",     num: "04", label: "Опционы и поток",     icon: "🎯" },
+  { id: "smartmoney",  num: "05", label: "Умные деньги",        icon: "🏦" },
+  { id: "intermarket", num: "06", label: "Межрыночный анализ",        icon: "🌐" },
+  { id: "altdata",     num: "07", label: "Альтернативные данные",   icon: "🔍" },
+  { id: "probability", num: "08", label: "Модель вероятностей",  icon: "🎲" },
+  { id: "narrative",   num: "09", label: "Нарратив", icon: "📡" },
+  { id: "telegram",    num: "10", label: "Telegram пост",     icon: "✈️" },
 ];
 
 const getNow = () => new Date().toLocaleString("ru-RU", {
@@ -19,143 +19,146 @@ const getNow = () => new Date().toLocaleString("ru-RU", {
   hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow"
 });
 
-const getMasterSystem = () => `Ты — AI Hedge Fund Intelligence Operating System.
+const getMasterSystem = () => `Ты — аналитик элитного хедж-фонда. Пишешь для русскоязычного инвестиционного Telegram-канала.
 Дата: ${getNow()} (Москва)
-Правила:
-- Используй веб-поиск для РЕАЛЬНЫХ актуальных данных
-- Указывай источник для ключевых цифр
-- Максимум 400 слов на ответ
-- Только русский язык
-- НИКОГДА не выдумывай цены и цифры
-- Tone: elite hedge fund intelligence desk`;
+
+ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА:
+- Используй веб-поиск для получения РЕАЛЬНЫХ актуальных данных
+- Указывай источник для ключевых цифр (например: Yahoo Finance, Bloomberg, Reuters)
+- Максимум 400 слов на раздел
+- СТРОГО только русский язык — никаких английских терминов
+- Переводи термины: Market cap → Рыночная капитализация, Revenue → Выручка, Earnings → Прибыль, Guidance → Прогноз, Backlog → Портфель заказов, Float → Доля в обращении, Short interest → Короткие позиции, Implied volatility → Ожидаемая волатильность, Put/Call ratio → Соотношение пут/колл, Open interest → Открытый интерес, Gamma squeeze → Гамма-сжатие, Short squeeze → Принудительное закрытие шортов, Institutional → Институциональный, Accumulation → Накопление, Distribution → Распределение, Bullish → Бычий, Bearish → Медвежий, Catalyst → Катализатор, Upside → Потенциал роста, Downside → Потенциал снижения, Target price → Целевая цена, Rating → Рейтинг, Upgrade → Повышение рейтинга, Downgrade → Понижение рейтинга
+- НИКОГДА не выдумывай цены, цифры и события
+- Тон: профессиональный, конкретный, без воды`;
 
 const PROMPTS = {
-  core: (t) => `Найди через веб-поиск: полное название компании ${t}, текущая цена, market cap, главные новости за 30 дней.
+  core: (t) => `Найди через веб-поиск: полное название компании ${t}, текущая цена, рыночная капитализация, главные новости за 30 дней.
 
-## КОМПАНИЯ
-Полное название и тикер · Цена $X (источник) · Market cap · Сектор
+## ПРОФИЛЬ КОМПАНИИ
+Полное название и тикер · Цена $X (источник) · Рыночная капитализация · Сектор
 
-## ЧТО РЫНОК НЕ ВИДИТ
-2-3 скрытых возможности которые рынок недооценивает
+## ЧТО РЫНОК НЕ ЗАМЕЧАЕТ
+2-3 скрытых возможности которые рынок недооценивает прямо сейчас
 
 ## ТОП-3 КАТАЛИЗАТОРА
-Реальные события с датами из поиска
+Реальные предстоящие события с датами из поиска
 
 ## ВЕРДИКТ
-weak/interesting/strong/asymmetric + 2 предложения обоснования`,
+слабая идея / интересно / сильная идея / асимметричная возможность / потенциальный лидер рынка + 2 предложения обоснования`,
 
-  ticker: (t) => `Найди через веб-поиск: цена ${t} сейчас, 52W High/Low, analyst price targets, последний earnings report.
+  ticker: (t) => `Найди через веб-поиск: цена ${t} сейчас, диапазон за 52 недели, целевые цены аналитиков, последний отчёт о прибыли.
 
-## ДАННЫЕ
-Цена $X · 52W High/Low · Market cap · Analyst target средний/высокий
+## КЛЮЧЕВЫЕ ДАННЫЕ
+Цена $X · Диапазон 52 нед: $X–$X · Рыночная капитализация · Целевая цена аналитиков
 
-## ПОЧЕМУ ИНТЕРЕСНО
-3-4 предложения на основе найденных данных
+## ПОЧЕМУ ЭТО ИНТЕРЕСНО
+3-4 предложения на основе найденных реальных данных
 
 ## БЛИЖАЙШИЕ СОБЫТИЯ
-Реальные даты из поиска
+Реальные даты из поиска — отчёты, конференции, решения регуляторов
 
-## VERDICT
+## ВЕРДИКТ
 Оценка + обоснование`,
 
-  technical: (t) => `Найди технические данные ${t}: текущая цена, объём, уровни SMA 50 и 200.
+  technical: (t) => `Найди технические данные ${t}: текущая цена, объём торгов, уровни скользящих средних.
 
 ## ТЕХНИЧЕСКАЯ КАРТИНА
-Тренд · SMA50 $X · SMA200 $X · Momentum
+Тренд · СС50 $X · СС200 $X · Импульс движения
 
 ## КЛЮЧЕВЫЕ УРОВНИ
-Поддержка $X · Сопротивление $X · Entry $X · Stop $X
+Поддержка $X · Сопротивление $X · Точка входа $X · Стоп-лосс $X
 
-## SMART MONEY
-Accumulation или distribution по объёму и поведению цены?
+## ДЕЙСТВИЯ КРУПНЫХ ИГРОКОВ
+Накопление или распределение судя по объёму и поведению цены?
 
 ## ВЫВОД
-Bullish/Bearish/Neutral + конкретный entry уровень`,
+Бычий/Медвежий/Нейтральный + конкретный уровень входа`,
 
-  options: (t) => `Найди опционные данные ${t}: implied volatility, put/call ratio, необычная активность.
+  options: (t) => `Найди данные по опционам ${t}: ожидаемая волатильность, соотношение пут/колл, открытый интерес, необычная активность.
 
-## OPTIONS СТРУКТУРА
-IV % · Put/Call ratio · Крупнейшие OI уровни и страйки
+## СТРУКТУРА ОПЦИОННОГО РЫНКА
+Ожид. волатильность % · Соотношение пут/колл · Крупнейшие уровни открытого интереса
 
-## SQUEEZE ВЕРОЯТНОСТЬ
-Short float % · Gamma squeeze / Short squeeze сигналы
+## ВЕРОЯТНОСТЬ СЖАТИЯ
+Доля коротких позиций % · Сигналы гамма-сжатия / принудительного закрытия шортов
 
 ## 2 КОНКРЕТНЫЕ СТРАТЕГИИ
-Стратегия 1: тип, страйк $X, экспирация дата, премия ~$X
-Стратегия 2: тип, страйк $X, экспирация дата, детали
+Стратегия 1: тип, страйк $X, дата экспирации, примерная премия ~$X
+Стратегия 2: тип, страйк $X, дата экспирации, детали
 
 ## ВЫВОД`,
 
-  smartmoney: (t) => `Найди: последние 13F изменения по ${t}, insider trades за 90 дней, short interest %.
+  smartmoney: (t) => `Найди: последние изменения позиций крупных фондов по ${t}, сделки инсайдеров за 90 дней, доля коротких позиций.
 
-## ИНСТИТУЦИОНАЛЫ
-Кто купил и кто продал в последних 13F? Конкретные фонды.
+## ДЕЙСТВИЯ ИНСТИТУЦИОНАЛОВ
+Кто из крупных фондов купил и кто продал в последних отчётах?
 
-## SHORT INTEREST
-Short float % · Days to cover · Изменение vs прошлый месяц
+## КОРОТКИЕ ПОЗИЦИИ
+Доля коротких позиций % · Дней до покрытия · Изменение за месяц
 
-## INSIDER ACTIVITY
+## ДЕЙСТВИЯ ИНСАЙДЕРОВ
 Покупки или продажи менеджмента за последние 90 дней
 
 ## ВЫВОД
-Smart money: accumulating / distributing / neutral`,
+Крупные игроки: накапливают / распределяют / нейтральны`,
 
-  intermarket: (t) => `Найди текущие macro данные: Fed funds rate, DXY уровень, US 10Y Treasury yield, VIX.
+  intermarket: (t) => `Найди текущие макро данные: ставка ФРС, индекс доллара DXY, доходность 10-летних облигаций США, индекс страха VIX.
 
-## MACRO СЕЙЧАС
-Fed rate X% · DXY X · 10Y yield X% · VIX X — все с источниками
+## МАКРО КАРТИНА СЕЙЧАС
+Ставка ФРС X% · DXY X · Доходность 10 лет X% · VIX X — все с источниками
 
 ## ВЛИЯНИЕ НА ${t}
-Конкретно как текущая macro среда помогает или мешает ${t}
+Конкретно как текущая макро среда помогает или мешает ${t}
 
-## HIDDEN MACRO SIGNAL
-Один неочевидный macro фактор влияющий на ${t}
+## СКРЫТЫЙ МАКРО СИГНАЛ
+Один неочевидный макро фактор влияющий на ${t}
 
 ## ВЫВОД
-Macro tailwind / headwind / neutral`,
+Макро попутный ветер / встречный ветер / нейтрально для ${t}`,
 
-  altdata: (t) => `Найди альтернативные данные по ${t}: открытые вакансии LinkedIn, партнёрства и контракты за 90 дней.
+  altdata: (t) => `Найди альтернативные данные по ${t}: открытые вакансии на LinkedIn, партнёрства и контракты за 90 дней.
 
-## HIRING SIGNAL
-Количество вакансий · Ключевые направления · Что говорит о стратегии
+## СИГНАЛ ОТ НАЙМА
+Количество вакансий · Ключевые направления найма · Что это говорит о стратегии компании
 
 ## КОНТРАКТЫ И ПАРТНЁРСТВА
-Реальные из поиска за последние 3 месяца с суммами
+Реальные сделки из поиска за последние 3 месяца с суммами
 
-## DIGITAL FOOTPRINT
-Web traffic, GitHub, developer activity если применимо
+## ЦИФРОВОЙ СЛЕД
+Трафик сайта, активность на GitHub, активность разработчиков если применимо
 
-## ТОП СИГНАЛ
-Главный альтернативный сигнал который рынок игнорирует`,
+## ГЛАВНЫЙ СИГНАЛ
+Один ключевой альтернативный сигнал который рынок игнорирует`,
 
   probability: (t) => `На основе доступных данных по ${t} построй реалистичные сценарии:
 
-## СЦЕНАРИИ
-🐻 BEAR (X%): конкретный триггер · цель $X · timing
-📊 BASE (X%): конкретный триггер · цель $X · timing
-🐂 BULL (X%): конкретный триггер · цель $X · timing
-🚀 ASYMMETRIC (X%): black swan событие · цель $X
+## СЦЕНАРИИ РАЗВИТИЯ
 
-## REFLEXIVITY
-FOMO trigger уровень · Panic trigger уровень
+🐻 МЕДВЕЖИЙ (X%): конкретный триггер · цель $X · срок реализации
+📊 БАЗОВЫЙ (X%): конкретный триггер · цель $X · срок реализации
+🐂 БЫЧИЙ (X%): конкретный триггер · цель $X · срок реализации
+🚀 АСИММЕТРИЧНЫЙ (X%): маловероятное событие · цель $X
+
+## ПСИХОЛОГИЯ РЫНКА
+Уровень срабатывания FOMO · Уровень паники и массовых продаж
 
 ## ВЫВОД
-Expected value · Лучший entry · Conviction: low/medium/high/very high`,
+Ожидаемая доходность · Лучшая точка входа · Уверенность: низкая/средняя/высокая/очень высокая`,
 
-  narrative: (t) => `Найди текущий нарратив вокруг ${t} в Bloomberg/Reuters, X/Twitter, Reddit за последние 2 недели.
+  narrative: (t) => `Найди текущий нарратив вокруг ${t} в Bloomberg, Reuters, X/Twitter, Reddit за последние 2 недели.
 
 ## НАРРАТИВ СЕЙЧАС
-Доминирующий нарратив · Кто двигает (institutional/retail/media) · Crowded или early?
+Доминирующая история · Кто её двигает (институционалы/розница/СМИ) · Переполнен или ещё ранняя стадия?
 
-## MOMENTUM
-Растёт или затухает интерес? На каком этапе хайп-цикла Gartner?
+## ДИНАМИКА ИНТЕРЕСА
+Растёт или затухает интерес? На каком этапе цикла хайпа?
 
-## CATALYST FOR MAINSTREAM
-Что сделает ${t} известным широкой аудитории?
+## КАТАЛИЗАТОР МАССОВОГО ПРИЗНАНИЯ
+Что сделает ${t} известным широкой аудитории инвесторов?
 
 ## ВЫВОД
-Stage: early/building/peak/saturated + time to mainstream`,
-};
+Стадия: ранняя / нарастающая / пиковая / насыщенная + время до мейнстрима`,
+};;
 
 function getTelegramPrompt(t, ctx) {
   return `Ты создаёшь профессиональный Telegram пост для инвестиционного канала @OKI_invest.
@@ -330,12 +333,12 @@ export default function App() {
     const mainEngines = ENGINES.slice(0, 9);
 
     try {
-      for (let i = 0; i < mainEngines.length; i += 3) {
+      for (let i = 0; i < mainEngines.length; i++) {
         if (abortRef.current.signal.aborted) break;
-        const batch = mainEngines.slice(i, i + 3);
-        setPhase("Группа " + (Math.floor(i/3)+1) + "/3: " + batch.map(e => e.label.split(" ")[0]).join(", "));
-        await Promise.all(batch.map(eng => runEngine(eng, t, 2)));
-        if (i + 3 < mainEngines.length) await sleep(2000);
+        const eng = mainEngines[i];
+        setPhase(eng.num + "/09: " + eng.label);
+        await runEngine(eng, t, 3);
+        if (i < mainEngines.length - 1) await sleep(1500);
       }
 
       if (!abortRef.current.signal.aborted) {
@@ -349,7 +352,15 @@ export default function App() {
         ).join("\n\n---\n\n");
 
         try {
-          const result = await callEngine(getTelegramPrompt(t, ctx), false);
+          let result = await callEngine(getTelegramPrompt(t, ctx), false);
+          // If rate limited, retry once after pause
+          if (result === "__RATE_LIMIT__" || result.includes("__RATE_LIMIT__")) {
+            await sleep(10000);
+            result = await callEngine(getTelegramPrompt(t, ctx), false);
+          }
+          if (result === "__RATE_LIMIT__" || result.includes("__RATE_LIMIT__")) {
+            result = "⚠️ Превышен лимит. Нажми ↺ Повтор на модуле 10.";
+          }
           dataRef.current[tgEng.id] = result;
           setResults(p => ({ ...p, [tgEng.id]: result }));
           setStatuses(p => ({ ...p, [tgEng.id]: "done" }));
@@ -378,7 +389,14 @@ export default function App() {
         "[" + e.label + "]:\n" + (dataRef.current[e.id] || "нет данных").slice(0, 900)
       ).join("\n\n---\n\n");
       try {
-        const result = await callEngine(getTelegramPrompt(t, ctx), false);
+        let result = await callEngine(getTelegramPrompt(t, ctx), false);
+        if (result === "__RATE_LIMIT__" || result.includes("__RATE_LIMIT__")) {
+          await sleep(10000);
+          result = await callEngine(getTelegramPrompt(t, ctx), false);
+        }
+        if (result === "__RATE_LIMIT__" || result.includes("__RATE_LIMIT__")) {
+          result = "⚠️ Превышен лимит. Нажми ↺ Повтор ещё раз через минуту.";
+        }
         dataRef.current.telegram = result;
         setResults(p => ({ ...p, telegram: result }));
         setStatuses(p => ({ ...p, telegram: "done" }));
@@ -470,8 +488,8 @@ export default function App() {
   const getBadge = (id) => {
     const s = statuses[id];
     if (s === "done")    return { text: "✓ Готово",    color: "#27ae60", border: "#27ae60", bg: "#f0fff4" };
-    if (s === "running") return { text: "⟳ Анализ",   color: "#2980b9", border: "#3498db", bg: "#ebf5fb" };
-    if (s === "timeout") return { text: "⏱ Таймаут",  color: "#e67e22", border: "#f39c12", bg: "#fef9e7" };
+    if (s === "running") return { text: "⟳ Анализирую",   color: "#2980b9", border: "#3498db", bg: "#ebf5fb" };
+    if (s === "timeout") return { text: "⏱ Превышено время",  color: "#e67e22", border: "#f39c12", bg: "#fef9e7" };
     if (s === "error")   return { text: "↺ Ошибка",   color: "#e74c3c", border: "#e74c3c", bg: "#fdf2f2" };
     return { text: "○ Ожидание", color: "#bbb", border: "#e0e0e0", bg: "#fafafa" };
   };
@@ -504,10 +522,10 @@ export default function App() {
           <div style={{ fontSize: 12, color: "#27ae60", marginBottom: 14 }}>⚡ Batch 3×3 · 🔍 Веб-поиск · 🔄 Auto-retry · 🎨 GPT постеры · ✈️ Telegram</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
             {[
-              { label: "Anthropic API Key *", val: apiKey, set: setApiKey, ph: "sk-ant-...", req: true },
-              { label: "OpenAI API Key (постеры)", val: openaiKey, set: setOpenaiKey, ph: "sk-proj-..." },
-              { label: "Telegram Bot Token", val: tgToken, set: setTgToken, ph: "1234567890:ABC..." },
-              { label: "Telegram Chat ID", val: tgChatId, set: setTgChatId, ph: "@OKI_invest" },
+              { label: "Ключ Anthropic API *", val: apiKey, set: setApiKey, ph: "sk-ant-...", req: true },
+              { label: "Ключ OpenAI (постеры)", val: openaiKey, set: setOpenaiKey, ph: "sk-proj-..." },
+              { label: "Токен Telegram бота", val: tgToken, set: setTgToken, ph: "1234567890:ABC..." },
+              { label: "ID Telegram канала", val: tgChatId, set: setTgChatId, ph: "@OKI_invest" },
             ].map(f => (
               <div key={f.label}>
                 <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: f.req ? "#c0392b" : "#555", marginBottom: 6 }}>{f.label}</label>
@@ -586,7 +604,7 @@ export default function App() {
             ) : (
               <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 340, color: "#bbb", gap: 8 }}>
                 <div style={{ fontSize: 32 }}>👆</div>
-                <div style={{ fontSize: 14 }}>Выбери модуль выше</div>
+                <div style={{ fontSize: 14 }}>Выбери раздел выше</div>
               </div>
             )}
           </div>
@@ -598,7 +616,7 @@ export default function App() {
         <div style={{ padding: "16px 24px", maxWidth: 960, margin: "0 auto", display: "flex", gap: 10, flexWrap: "wrap" }}>
           {openaiKey && (
             <button onClick={genPoster} disabled={posterLoading} style={{ background: posterLoading ? "#95a5a6" : "#27ae60", color: "#fff", border: "none", borderRadius: 8, padding: "11px 20px", fontSize: 13, fontWeight: 600, cursor: posterLoading ? "not-allowed" : "pointer" }}>
-              {posterLoading ? "⟳ Генерирую постер..." : "🎨 Создать постер"}
+              {posterLoading ? "⟳ Создаю постер..." : "🎨 Создать постер"}
             </button>
           )}
           <button onClick={openPreview} style={{ background: "#f39c12", color: "#fff", border: "none", borderRadius: 8, padding: "11px 20px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>👁 Предпросмотр поста</button>
@@ -649,13 +667,13 @@ export default function App() {
                   {tgToken ? (
                     <button onClick={publish} disabled={tgStatus === "sending" || tgStatus === "sent"}
                       style={{ flex: 1, background: tgStatus === "sent" ? "#27ae60" : tgStatus === "error" ? "#e74c3c" : "#0088cc", color: "#fff", border: "none", borderRadius: 8, padding: "11px 16px", fontSize: 13, fontWeight: 700, cursor: tgStatus === "sending" || tgStatus === "sent" ? "not-allowed" : "pointer" }}>
-                      {tgStatus === "sent" ? "✓ Опубликовано в @OKI_invest" : tgStatus === "sending" ? "⟳ Отправляю..." : tgStatus === "error" ? "✗ Ошибка" : "✈️ Опубликовать в @OKI_invest"}
+                      {tgStatus === "sent" ? "✓ Опубликовано в @OKI_invest" : tgStatus === "sending" ? "⟳ Публикую..." : tgStatus === "error" ? "✗ Ошибка" : "✈️ Опубликовать в @OKI_invest"}
                     </button>
                   ) : (
                     <div style={{ flex: 1, background: "#fff3cd", border: "1px solid #ffc107", borderRadius: 8, padding: "11px 16px", fontSize: 12, color: "#856404", textAlign: "center" }}>⚠️ Добавь Telegram токен в Настройки</div>
                   )}
                   <button onClick={copyText} style={{ background: copied ? "#27ae60" : "#fff", color: copied ? "#fff" : "#555", border: "1.5px solid " + (copied ? "#27ae60" : "#d0d0d0"), borderRadius: 8, padding: "11px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", minWidth: 110 }}>
-                    {copied ? "✓ Скопировано" : "⎘ Копировать"}
+                    {copied ? "✓ Скопировано!" : "⎘ Копировать текст"}
                   </button>
                 </div>
                 {tgStatus === "sent" && (
