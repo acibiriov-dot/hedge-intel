@@ -393,7 +393,8 @@ export default function App() {
           }
           dataRef.current[tgEng.id] = result;
           setResults(p => ({ ...p, [tgEng.id]: result }));
-          setStatuses(p => ({ ...p, [tgEng.id]: "done" }));
+          const tgHasError = result.includes("Превышен лимит") || result.includes("__RATE_LIMIT__");
+          setStatuses(p => ({ ...p, [tgEng.id]: tgHasError ? "error" : "done" }));
         } catch (err) {
           setStatuses(p => ({ ...p, [tgEng.id]: "error" }));
         }
@@ -459,38 +460,36 @@ export default function App() {
   async function genPoster() {
     const t = ticker.toUpperCase();
     const brief = editablePost.slice(0, 400);
-    const prompt = `Marvel Comics style investment poster for stock ${t}. Vibrant, dynamic, professional.
-Style: bold black outlines, vivid colors (gold, black, red), Marvel comic panels, action illustrations, bold typography. NO blurry text.
-Layout: LARGE title "${t}" at top, 4-5 comic panels each showing one key insight, final verdict at bottom in bold.
-Text in panels must be clear, sharp and readable. Use simple short English labels in panels.
-Watermark: @OKI_invest in corner.
-Key data to illustrate: ${brief}`;
+    const prompt = `Marvel Comics style editorial poster featuring ${t} company analysis. Vibrant, dynamic comic book art.
+Style: bold black outlines, vivid colors (gold, black, red), comic book panels, action illustrations, bold typography. Sharp readable text only.
+Layout: large bold title "${t}" at top, 4-5 comic panels each with illustration and short label, summary panel at bottom.
+All text in panels must be crisp, clear and legible. Short English labels only.
+Corner watermark: @OKI_invest
+Context for illustrations: ${brief}`;
     await buildPoster(prompt, setPosterUrl, setPosterLoading);
   }
 
   async function genPoster2() {
     const t = ticker.toUpperCase();
     const brief = editablePost2.slice(0, 400);
-    const prompt = `Marvel Comics analytical investment poster for ${t}. Deep analysis theme.
-Style: bold black outlines, blue/white/gold colors, professional analytical tone, comic panels, sharp readable text.
-Layout: title "DEEP ANALYSIS: ${t}" at top, 4-5 panels showing financial data/institutional moves/scenarios, probability comparison panel.
-Each panel has clear bold English label and illustration. Charts, graphs, bull vs bear icons.
-Text must be crisp and readable. NO blurry text.
-Watermark: @OKI_invest.
-Data to illustrate: ${brief}`;
+    const prompt = `Marvel Comics style editorial poster about ${t} company. Data visualization theme.
+Style: bold black outlines, blue/white/gold colors, comic book panels, sharp readable text, professional look.
+Layout: title "ANALYSIS: ${t}" at top, 4-5 panels with charts/graphs/data illustrations, comparison panel at bottom.
+Each panel: clear bold label + illustration. Use bar charts, line graphs, magnifying glass, newspaper icons.
+All text crisp and legible. Corner watermark: @OKI_invest.
+Context: ${brief}`;
     await buildPoster(prompt, setPosterUrl2, setPosterLoading2);
   }
 
   async function genPoster3() {
     const t = ticker.toUpperCase();
     const brief = editablePost3.slice(0, 400);
-    const prompt = `Marvel Comics trading strategy poster for ${t}. Action-packed, energetic.
-Style: bold black outlines, green/black/gold colors, dynamic action illustrations, sharp comic panels.
-Layout: title "STRATEGY: ${t}" at top, 4-5 panels showing entry levels/options strategies/technical analysis/stop levels, strong call-to-action at bottom.
-Show price levels, arrows indicating direction, options chain visualization.
-Text must be crisp bold and readable. NO blurry or distorted text.
-Watermark: @OKI_invest.
-Data to illustrate: ${brief}`;
+    const prompt = `Marvel Comics style editorial poster about ${t} company outlook. Action-packed energetic design.
+Style: bold black outlines, green/black/gold colors, dynamic comic panels, sharp illustrations.
+Layout: title "OUTLOOK: ${t}" at top, 4-5 panels with price levels/arrows/chart patterns/technical indicators, conclusion panel at bottom.
+Show directional arrows, candlestick chart, target price labels, support/resistance lines as comic art.
+All text crisp bold readable. Corner watermark: @OKI_invest.
+Context: ${brief}`;
     await buildPoster(prompt, setPosterUrl3, setPosterLoading3);
   }
 
