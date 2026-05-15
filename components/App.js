@@ -459,37 +459,37 @@ export default function App() {
 
   async function genPoster() {
     const t = ticker.toUpperCase();
-    const brief = editablePost.slice(0, 400);
-    const prompt = `Marvel Comics style editorial poster featuring ${t} company analysis. Vibrant, dynamic comic book art.
-Style: bold black outlines, vivid colors (gold, black, red), comic book panels, action illustrations, bold typography. Sharp readable text only.
-Layout: large bold title "${t}" at top, 4-5 comic panels each with illustration and short label, summary panel at bottom.
-All text in panels must be crisp, clear and legible. Short English labels only.
-Corner watermark: @OKI_invest
-Context for illustrations: ${brief}`;
+    const brief = editablePost.slice(0, 600);
+    const prompt = "Создай постер в стиле комиксов Марвел для Telegram-канала об аналитике компаний. " +
+      "Стиль: яркие цвета, жирные контуры, динамичные иллюстрации, заголовки как в комиксах Марвел, несколько панелей с текстом и картинками. " +
+      "Весь текст на постере строго на русском языке. " +
+      "Структура: крупный заголовок вверху с названием " + t + ", 4-5 панелей комикса где каждая иллюстрирует один факт, итоговая строка внизу. " +
+      "Логотип @OKI_invest в углу. " +
+      "Текст для иллюстрирования: " + brief;
     await buildPoster(prompt, setPosterUrl, setPosterLoading);
   }
 
   async function genPoster2() {
     const t = ticker.toUpperCase();
-    const brief = editablePost2.slice(0, 400);
-    const prompt = `Marvel Comics style editorial poster about ${t} company. Data visualization theme.
-Style: bold black outlines, blue/white/gold colors, comic book panels, sharp readable text, professional look.
-Layout: title "ANALYSIS: ${t}" at top, 4-5 panels with charts/graphs/data illustrations, comparison panel at bottom.
-Each panel: clear bold label + illustration. Use bar charts, line graphs, magnifying glass, newspaper icons.
-All text crisp and legible. Corner watermark: @OKI_invest.
-Context: ${brief}`;
+    const brief = editablePost2.slice(0, 600);
+    const prompt = "Создай аналитический постер в стиле комиксов Марвел для Telegram-канала об аналитике компаний. " +
+      "Стиль: синие и золотые тона, жирные контуры, панели с данными и графиками, профессиональный вид. " +
+      "Весь текст на постере строго на русском языке. " +
+      "Структура: заголовок РАЗБОР " + t + " вверху, 4-5 панелей с ключевыми данными и сценариями, вывод внизу. " +
+      "Логотип @OKI_invest в углу. " +
+      "Текст для иллюстрирования: " + brief;
     await buildPoster(prompt, setPosterUrl2, setPosterLoading2);
   }
 
   async function genPoster3() {
     const t = ticker.toUpperCase();
-    const brief = editablePost3.slice(0, 400);
-    const prompt = `Marvel Comics style editorial poster about ${t} company outlook. Action-packed energetic design.
-Style: bold black outlines, green/black/gold colors, dynamic comic panels, sharp illustrations.
-Layout: title "OUTLOOK: ${t}" at top, 4-5 panels with price levels/arrows/chart patterns/technical indicators, conclusion panel at bottom.
-Show directional arrows, candlestick chart, target price labels, support/resistance lines as comic art.
-All text crisp bold readable. Corner watermark: @OKI_invest.
-Context: ${brief}`;
+    const brief = editablePost3.slice(0, 600);
+    const prompt = "Создай постер в стиле комиксов Марвел для Telegram-канала об аналитике компаний. Тема: уровни и точки входа по " + t + ". " +
+      "Стиль: зелёные и золотые тона, жирные контуры, энергичные иллюстрации, панели комикса. " +
+      "Весь текст на постере строго на русском языке. " +
+      "Структура: заголовок СТРАТЕГИЯ " + t + " вверху, 4-5 панелей с уровнями и точками входа, итоговый вывод внизу. " +
+      "Логотип @OKI_invest в углу. " +
+      "Текст для иллюстрирования: " + brief;
     await buildPoster(prompt, setPosterUrl3, setPosterLoading3);
   }
 
