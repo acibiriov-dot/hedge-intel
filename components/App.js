@@ -227,6 +227,16 @@ ${ctx.slice(0, 5000)}
   return base;
 }
 
+function cleanForTelegram(text) {
+  if (typeof text !== "string") return "";
+  return text
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/\*(.+?)\*/g, "$1")
+    .replace(/#{1,6}\s/g, "")
+    .replace(/`(.+?)`/g, "$1")
+    .trim();
+}
+
 function extractPost(raw) {
   if (typeof raw !== "string") return "";
   const m = raw.match(/##\s*TELEGRAM POST\s*([\s\S]*?)(?=##\s*POSTER BRIEF|$)/i);
@@ -566,7 +576,7 @@ ${brief}`;
     setTgStatus("sending");
     setAppError(null);
     try {
-      const body = { token: tgToken, chatId: tgChatId, text: editablePost };
+      const body = { token: tgToken, chatId: tgChatId, text: cleanForTelegram(editablePost) };
       if (posterUrl && posterUrl.startsWith("data:")) {
         body.imageBase64 = posterUrl.split(",")[1];
       }
@@ -589,7 +599,7 @@ ${brief}`;
     if (!tgToken || !tgChatId) return;
     setTgStatus2("sending");
     try {
-      const body2 = { token: tgToken, chatId: tgChatId, text: editablePost2 };
+      const body2 = { token: tgToken, chatId: tgChatId, text: cleanForTelegram(editablePost2) };
       if (posterUrl2 && posterUrl2.startsWith("data:")) {
         body2.imageBase64 = posterUrl2.split(",")[1];
       }
@@ -607,7 +617,7 @@ ${brief}`;
     if (!tgToken || !tgChatId) return;
     setTgStatus3("sending");
     try {
-      const body3 = { token: tgToken, chatId: tgChatId, text: editablePost3 };
+      const body3 = { token: tgToken, chatId: tgChatId, text: cleanForTelegram(editablePost3) };
       if (posterUrl3 && posterUrl3.startsWith("data:")) {
         body3.imageBase64 = posterUrl3.split(",")[1];
       }
@@ -640,10 +650,13 @@ ${brief}`;
   }
 
   async function publishAll() {
+    setTgStatus(null);
+    setTgStatus2(null);
+    setTgStatus3(null);
     await publish();
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise(r => setTimeout(r, 3000));
     await publish2();
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise(r => setTimeout(r, 3000));
     await publish3();
   }
 
