@@ -229,12 +229,34 @@ ${ctx.slice(0, 5000)}
 
 function cleanForTelegram(text) {
   if (typeof text !== "string") return "";
-  return text
-    .replace(/\*\*(.+?)\*\*/g, "$1")
-    .replace(/\*(.+?)\*/g, "$1")
-    .replace(/#{1,6}\s/g, "")
-    .replace(/`(.+?)`/g, "$1")
-    .trim();
+  var result = text;
+  // Remove bold markdown
+  result = result.replace(/[*][*]([^*]+)[*][*]/g, "$1");
+  // Remove italic markdown  
+  result = result.replace(/[*]([^*]+)[*]/g, "$1");
+  // Remove headers
+  result = result.replace(/^#{1,6} /gm, "");
+  // Remove code blocks
+  result = result.replace(/```[^`]*```/g, "");
+  result = result.replace(/`([^`]+)`/g, "$1");
+  // Convert links to plain text
+  result = result.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
+  // Remove underline markdown
+  result = result.replace(/__([^_]+)__/g, "$1");
+  result = result.replace(/_([^_]+)_/g, "$1");
+  // Remove invisible unicode chars
+  result = result.replace(/⠀/g, "");
+  result = result.replace(/⁠/g, "");
+  result = result.replace(/​/g, "");
+  result = result.replace(/ /g, " ");
+  // Remove triple dashes
+  result = result.replace(/^---+$/gm, "");
+  // Clean up multiple blank lines
+  result = result.replace(/
+{3,}/g, "
+
+");
+  return result.trim();
 }
 
 function extractPost(raw) {
