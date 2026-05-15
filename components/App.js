@@ -546,9 +546,13 @@ export default function App() {
     if (!tgToken || !tgChatId) return;
     setTgStatus2("sending");
     try {
+      const body2 = { token: tgToken, chatId: tgChatId, text: editablePost2 };
+      if (posterUrl2 && posterUrl2.startsWith("data:")) {
+        body2.imageBase64 = posterUrl2.split(",")[1];
+      }
       const r = await fetch("/api/telegram", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: tgToken, chatId: tgChatId, text: editablePost2 }),
+        body: JSON.stringify(body2),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || "TG error");
