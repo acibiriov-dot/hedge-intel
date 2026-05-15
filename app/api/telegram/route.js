@@ -1,26 +1,47 @@
 export async function POST(request) {
   try {
-    const { token, chatId, text, imageBase64, noMarkdown } = await request.json();
+    const { token, chatId, text, imageBase64 } = await request.json();
 
     if (!token || !chatId || !text) {
       return Response.json({ error: "Missing required fields" }, { status: 400 });
     }
 
-    // Clean text - remove any remaining problematic chars
-    const cleanText = text
-      .replace(/\*\*/g, "")
-      .replace(/\*/g, "")
-      .replace(/_{2}/g, "")
-      .replace(/`/g, "")
-      .replace(/^#{1,6} /gm, "")
-      .replace(/^---+$/gm, "")
-      .replace(/\n{3,}/g, "\n\n")
-      .trim();
+    let s = text;
+
+    // Remove markdown bold **text**
+    s = s.split("**").join("");
+    // Remove markdown italic *text*
+    s = s.split("*").join("");
+    // Remove double underscores
+    s = s.split("__").join("");
+    // Remove escaped underscores \_
+    s = s.split("\\_").join("_");
+    // Remove markdown links [text](url) -> text: url
+    s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1: $2");
+    // Remove header markers
+    s = s.replace(/^#{1,6} /gm, "");
+    // Remove triple dashes
+    s = s.replace(/^-{3,}$/gm, "");
+    // Remove DYOR
+    s = s.split("DYOR.").join("").split("DYOR").join("");
+    // Replace arrow symbols
+    s = s.split("→").join("->");
+    s = s.split("←").join("<-");
+    s = s.split("↓").join("");
+    s = s.split("↑").join("");
+    // Remove invisible chars
+    s = s.replace(/\u2800/g, "");
+    s = s.replace(/\u2060/g, "");
+    s = s.replace(/\u200b/g, "");
+    s = s.replace(/\u00a0/g, " ");
+    // Clean extra blank lines
+    s = s.replace(/\n{3,}/g, "\n\n");
+    // Final trim
+    s = s.trim();
 
     if (imageBase64) {
-      // Send photo with caption (max 1024 chars)
       const imgBuffer = Buffer.from(imageBase64, "base64");
-      const caption = cleanText.slice(0, 1024);
+      const caption = s.slice(0, 1024);
 
       const formData = new FormData();
       const blob = new Blob([imgBuffer], { type: "image/png" });
@@ -35,9 +56,8 @@ export async function POST(request) {
       const data = await res.json();
       if (!data.ok) return Response.json({ error: data.description }, { status: 400 });
 
-      // If text longer than caption, send rest as separate message
-      if (cleanText.length > 1024) {
-        const rest = cleanText.slice(1024);
+      if (s.length > 1024) {
+        const rest = s.slice(1024);
         await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -52,13 +72,12 @@ export async function POST(request) {
       return Response.json({ ok: true });
     }
 
-    // Text only - no parse_mode to avoid pattern errors
     const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         chat_id: chatId,
-        text: cleanText,
+        text: s,
         disable_web_page_preview: true,
       }),
     });
