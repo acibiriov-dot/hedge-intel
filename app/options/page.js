@@ -69,16 +69,64 @@ function computeExpiryOptions(from, count = 6) {
 }
 
 /**
+ * Per-chain aggregate stats: put/call volume ratio + dominant magnet level.
+ */
+function chainStats(rows) {
+  let callVol = 0, putVol = 0;
+  let maxOI = 0, maxOIStrike = "—";
+  for (const r of rows) {
+    const vol  = num(r["Volume"]);
+    const oi   = num(r["Open Int."]);
+    const type = (r["Type"] || "").toLowerCase();
+    if (Number.isFinite(vol) && vol > 0) {
+      if (type === "call")     callVol += vol;
+      else if (type === "put") putVol  += vol;
+    }
+    if (Number.isFinite(oi) && oi > maxOI) {
+      maxOI = oi;
+      maxOIStrike = r["Strike"] || "—";
+    }
+  }
+  // pcr = 0 means "не определимо" (один из объёмов нулевой).
+  const pcr = callVol > 0 ? putVol / callVol : 0;
+  return { pcr, callVol, putVol, maxOI, maxOIStrike };
+}
+
+/** 🐂 / 🐻 / ⚡ emoji string for one contract, given its chain's stats. */
+function rowSignals(row, stats) {
+  const out = [];
+  const type = (row["Type"] || "").toLowerCase();
+  const vol  = num(row["Volume"]);
+  const oi   = num(row["Open Int."]);
+  // ⚡  unusual new positioning (volume vastly above standing OI)
+  if (Number.isFinite(vol) && Number.isFinite(oi) && oi > 0 && vol / oi > 5) {
+    out.push("⚡");
+  }
+  // 🐂 / 🐻  directional bias inherited from the chain's PCR
+  if (stats.pcr > 0 && stats.pcr < 0.5 && type === "call") out.push("🐂");
+  else if (stats.pcr > 1.5 && type === "put")              out.push("🐻");
+  return out.join(" ");
+}
+
+/** Single dominant emoji for a ticker — used in summary cards. */
+function dominantSignal(stats, anomalyCount) {
+  if (stats.pcr > 1.5)                       return "🐻";
+  if (stats.pcr > 0 && stats.pcr < 0.5)       return "🐂";
+  if (anomalyCount > 0)                       return "⚡";
+  return "—";
+}
+
+/**
  * Per-chain anomaly detection.
- * Returns array of { row, reasons } for contracts matching ANY rule:
+ * Returns array of { row, reasons, signals } for contracts matching ANY rule:
  *   - vol > 2 * OI           (real-time entry exceeding standing position)
+ *   - vol / OI > 5           (someone opening a major new position today)
  *   - IV  > 50               (high implied volatility)
  *   - vol >= 90th percentile (top 10% by volume within this ticker's chain)
  */
-function detectAnomalies(rows) {
+function detectAnomalies(rows, stats) {
   if (!Array.isArray(rows) || rows.length === 0) return [];
 
-  // Pre-compute the 90th percentile for volume within this chain.
   const vols = rows.map((r) => num(r["Volume"])).filter((v) => Number.isFinite(v) && v > 0);
   vols.sort((a, b) => a - b);
   const p90 = vols.length > 0
@@ -91,8 +139,9 @@ function detectAnomalies(rows) {
     const oi  = num(row["Open Int."]);
     const iv  = num(row["IV"]);
     const reasons = [];
-    if (Number.isFinite(vol) && vol > 0 && Number.isFinite(oi) && oi > 0 && vol > 2 * oi) {
-      reasons.push("V>2×OI");
+    if (Number.isFinite(vol) && vol > 0 && Number.isFinite(oi) && oi > 0) {
+      if (vol > 2 * oi)     reasons.push("V>2×OI");
+      if (vol / oi > 5)     reasons.push("V/OI>5×");
     }
     if (Number.isFinite(iv) && iv > 50) {
       reasons.push("IV>50%");
@@ -101,7 +150,7 @@ function detectAnomalies(rows) {
       reasons.push("vol top10%");
     }
     if (reasons.length > 0) {
-      found.push({ row, reasons });
+      found.push({ row, reasons, signals: rowSignals(row, stats) });
     }
   }
   return found;
@@ -123,7 +172,8 @@ export default function OptionsPage() {
   const [error, setError]       = useState("");
 
   // ----- watchlist scan state -----
-  const [anomalies, setAnomalies] = useState([]);
+  const [anomalies, setAnomalies]   = useState([]);
+  const [tickerStats, setTickerStats] = useState({});  // ticker → { pcr, maxOIStrike, dominantSignal, anomalyCount }
   const [scanLoading, setScanLoading] = useState(false);
   const [scanProgress, setScanProgress] = useState(null);  // { done, total }
   const [scanError, setScanError] = useState("");
@@ -189,9 +239,12 @@ export default function OptionsPage() {
     if (!finvizKey.trim()) { setScanError("Введи Finviz Elite token"); return; }
     setScanLoading(true);
     setAnomalies([]);
+    setTickerStats({});
     setScanProgress({ done: 0, total: WATCHLIST.length });
 
     // Parallel fetches; per-ticker failures don't abort the scan.
+    // NOTE: scan deliberately omits the `expiry` param — we want the FULL
+    // options chain (all expiries) so PCR and OI-magnet calcs are aggregate.
     let done = 0;
     const fetchOne = async (t) => {
       try {
@@ -215,11 +268,22 @@ export default function OptionsPage() {
     };
     const results = await Promise.all(WATCHLIST.map(fetchOne));
 
-    // Detect anomalies per chain (each chain's own p90 baseline).
+    // Compute per-ticker stats + detect anomalies (each chain's own p90 baseline + PCR).
     const allAnomalies = [];
+    const statsMap = {};
     for (const { ticker: tk, rows: chainRows } of results) {
-      for (const a of detectAnomalies(chainRows)) {
-        allAnomalies.push({ ticker: tk, row: a.row, reasons: a.reasons });
+      if (!chainRows.length) continue;
+      const stats = chainStats(chainRows);
+      const found = detectAnomalies(chainRows, stats);
+      statsMap[tk] = {
+        pcr:           stats.pcr,
+        maxOIStrike:   stats.maxOIStrike,
+        maxOI:         stats.maxOI,
+        anomalyCount:  found.length,
+        dominant:      dominantSignal(stats, found.length),
+      };
+      for (const a of found) {
+        allAnomalies.push({ ticker: tk, row: a.row, reasons: a.reasons, signals: a.signals });
       }
     }
 
@@ -227,6 +291,7 @@ export default function OptionsPage() {
     allAnomalies.sort((a, b) => num(b.row["Volume"]) - num(a.row["Volume"]));
 
     setAnomalies(allAnomalies);
+    setTickerStats(statsMap);
     setScanProgress(null);
     setScanLoading(false);
   }
@@ -412,7 +477,9 @@ export default function OptionsPage() {
       {/* ===== Section 1: Watchlist scan ===== */}
       <h2 style={S.h2}>1 · Watchlist скан</h2>
       <p style={S.note}>
-        Аномалии = (Volume &gt; 2×OI) ИЛИ (IV &gt; 50%) ИЛИ (Volume в топ-10% цепочки тикера).
+        Анализирует ВСЮ цепочку (все expiries) на каждом тикере. Аномалия = любое из:
+        Volume &gt; 2×OI · Volume/OI &gt; 5× · IV &gt; 50% · Volume в топ-10% цепочки.
+        🐂 / 🐻 — направление по PCR (&lt;0.5 или &gt;1.5). ⚡ — крупный новый объём.
         Сканируются: {WATCHLIST.join(", ")}.
       </p>
       <div style={S.row}>
@@ -430,30 +497,88 @@ export default function OptionsPage() {
       </div>
       {scanError ? <div style={S.error}>{scanError}</div> : null}
 
-      {/* Strategy chips: one per ticker with anomalies */}
+      {/* Per-ticker summary cards: PCR, dominant signal, max-OI magnet strike, strategy button */}
       {anomalyTickers.length > 0 ? (
-        <div style={S.chips}>
-          <span style={S.chipsLabel}>Построить стратегию:</span>
-          {anomalyTickers.map((t) => (
-            <button
-              key={t}
-              style={S.chip}
-              onClick={() => buildStrategy(t)}
-              disabled={busyStrategyTicker === t}
-            >
-              {busyStrategyTicker === t ? `…` : `$${t}`}
-            </button>
-          ))}
+        <div style={S.cardGrid}>
+          {anomalyTickers.map((t) => {
+            const s = tickerStats[t];
+            if (!s) return null;
+            const pcrColor = s.pcr > 1.5 ? "#ff6b6b" : (s.pcr > 0 && s.pcr < 0.5 ? "#51cf66" : "#888");
+            return (
+              <div key={t} style={S.card}>
+                <div style={S.cardHead}>
+                  <span style={S.cardTicker}>${t}</span>
+                  <span style={S.cardSig}>{s.dominant}</span>
+                </div>
+                <div style={S.cardRow}>
+                  <span style={S.cardKey}>PCR</span>
+                  <span style={{...S.cardVal, color: pcrColor}}>
+                    {s.pcr > 0 ? s.pcr.toFixed(2) : "—"}
+                  </span>
+                </div>
+                <div style={S.cardRow}>
+                  <span style={S.cardKey}>Магнит OI</span>
+                  <span style={S.cardVal}>${s.maxOIStrike}</span>
+                </div>
+                <div style={S.cardRow}>
+                  <span style={S.cardKey}>Аномалий</span>
+                  <span style={S.cardVal}>{s.anomalyCount}</span>
+                </div>
+                <button
+                  style={{...S.btnSm, marginTop: 8, width: "100%"}}
+                  onClick={() => buildStrategy(t)}
+                  disabled={busyStrategyTicker === t}
+                >
+                  {busyStrategyTicker === t ? "…" : "Построить стратегию"}
+                </button>
+              </div>
+            );
+          })}
         </div>
       ) : null}
 
-      {/* Anomaly table */}
+      {/* Auto-strategy: top-3 hottest anomalies, each with one-click strategy button */}
+      {anomalies.length > 0 ? (
+        <>
+          <h3 style={S.h3Section}>Топ-3 интересных аномалии</h3>
+          <div style={S.spotGrid}>
+            {anomalies.slice(0, 3).map((a, i) => {
+              const aId = `spot-${a.ticker}-${i}`;
+              const c = a.row;
+              return (
+                <div key={aId} style={S.spotCard}>
+                  <div style={S.spotHead}>
+                    <span style={S.cardTicker}>${a.ticker}</span>
+                    <span style={S.cardSig}>{a.signals || "⚡"}</span>
+                  </div>
+                  <div style={S.spotBody}>
+                    {c.Type} ${c.Strike} · exp {c.Expiry}
+                  </div>
+                  <div style={S.spotMetrics}>
+                    Vol {c.Volume} · OI {c["Open Int."]} · IV {c.IV}
+                  </div>
+                  <div style={S.spotReasons}>{a.reasons.join(", ")}</div>
+                  <button
+                    style={{...S.btnSm, marginTop: 8, width: "100%"}}
+                    onClick={() => buildStrategy(a.ticker)}
+                    disabled={busyStrategyTicker === a.ticker}
+                  >
+                    {busyStrategyTicker === a.ticker ? "…" : `Стратегия для $${a.ticker}`}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      ) : null}
+
+      {/* Full anomaly table */}
       {anomalies.length > 0 ? (
         <div style={S.tableWrap}>
           <table style={S.table}>
             <thead>
               <tr>
-                {["Ticker","Type","Strike","Expiry","Vol","OI","IV","Δ","Аномалии",""].map((h) => (
+                {["Ticker","Sig","Type","Strike","Expiry","Vol","OI","IV","Δ","Аномалии",""].map((h) => (
                   <th key={h} style={S.th}>{h}</th>
                 ))}
               </tr>
@@ -464,6 +589,7 @@ export default function OptionsPage() {
                 return (
                   <tr key={aId} style={i % 2 ? S.trAlt : S.tr}>
                     <td style={S.tdTicker}>${a.ticker}</td>
+                    <td style={S.tdSig}>{a.signals || ""}</td>
                     <td style={S.td}>{a.row.Type}</td>
                     <td style={S.tdNum}>{a.row.Strike}</td>
                     <td style={S.td}>{a.row.Expiry}</td>
@@ -606,6 +732,27 @@ const S = {
   chips:      { display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginBottom: 12 },
   chipsLabel: { color: "#888", fontSize: 12 },
   chip:       { padding: "5px 12px", background: "#1e40af", color: "#fff", border: "none", borderRadius: 14, cursor: "pointer", fontSize: 12, fontWeight: 500 },
+
+  // Per-ticker summary cards
+  cardGrid:   { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 10, marginBottom: 20 },
+  card:       { background: "#161820", border: "1px solid #2a2d33", borderRadius: 6, padding: "12px 14px" },
+  cardHead:   { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 },
+  cardTicker: { color: "#3b82f6", fontWeight: 700, fontSize: 15 },
+  cardSig:    { fontSize: 16 },
+  cardRow:    { display: "flex", justifyContent: "space-between", fontSize: 12, padding: "2px 0", color: "#bbb" },
+  cardKey:    { color: "#888" },
+  cardVal:    { color: "#e6e6e6", fontVariantNumeric: "tabular-nums" },
+
+  // Top-3 spotlight cards (highlighted with gold accent border)
+  h3Section:  { margin: "16px 0 8px", fontSize: 13, color: "#aaa", textTransform: "uppercase", letterSpacing: 0.5 },
+  spotGrid:   { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: 10, marginBottom: 20 },
+  spotCard:   { background: "#1a1c20", border: "1px solid #d97706", borderRadius: 6, padding: "12px 14px" },
+  spotHead:   { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 },
+  spotBody:   { color: "#e6e6e6", fontSize: 13, fontWeight: 600, marginBottom: 4 },
+  spotMetrics:{ color: "#aaa", fontSize: 11, marginBottom: 4, fontVariantNumeric: "tabular-nums" },
+  spotReasons:{ color: "#d97706", fontSize: 11, fontStyle: "italic" },
+
+  tdSig:      { padding: "8px 12px", color: "#e6e6e6", borderBottom: "1px solid #1f2126", fontSize: 14, whiteSpace: "nowrap" },
   error:      { padding: "8px 12px", background: "#3b1d1d", color: "#ff8888", borderRadius: 4, marginBottom: 12, fontSize: 13 },
   tableWrap:  { overflowX: "auto", border: "1px solid #2a2d33", borderRadius: 6, marginBottom: 12 },
   table:      { width: "100%", borderCollapse: "collapse", fontSize: 13 },
