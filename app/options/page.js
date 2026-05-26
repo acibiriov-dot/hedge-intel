@@ -28,6 +28,46 @@ function num(v) {
   return Number.isFinite(n) ? n : Number.NaN;
 }
 
+const RU_MONTHS_SHORT = [
+  "янв", "фев", "мар", "апр", "май", "июн",
+  "июл", "авг", "сен", "окт", "ноя", "дек",
+];
+
+/** Third Friday of (year, monthZeroBased). Standard US monthly options expiry. */
+function thirdFridayOfMonth(year, monthZeroBased) {
+  const firstOfMonth = new Date(year, monthZeroBased, 1);
+  // JS getDay: Sunday=0 .. Friday=5
+  const daysUntilFriday = (5 - firstOfMonth.getDay() + 7) % 7;
+  const day = 1 + daysUntilFriday + 14;
+  return new Date(year, monthZeroBased, day);
+}
+
+/** Build the next N monthly-expiry dates from `from`. Skips a month if its
+ *  third Friday has already passed. */
+function computeExpiryOptions(from, count = 6) {
+  const out = [];
+  const todayStart = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+  let y = from.getFullYear();
+  let m = from.getMonth();
+  let safety = 0;
+  while (out.length < count && safety < 36) {
+    const d = thirdFridayOfMonth(y, m);
+    if (d >= todayStart) {
+      const yy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const dd = String(d.getDate()).padStart(2, "0");
+      out.push({
+        iso: `${yy}-${mm}-${dd}`,
+        label: `${d.getDate()} ${RU_MONTHS_SHORT[d.getMonth()]} ${yy}`,
+      });
+    }
+    m++;
+    if (m > 11) { m = 0; y++; }
+    safety++;
+  }
+  return out;
+}
+
 /**
  * Per-chain anomaly detection.
  * Returns array of { row, reasons } for contracts matching ANY rule:
@@ -94,12 +134,19 @@ export default function OptionsPage() {
   // Single floating result panel — most recent action wins.
   const [resultPanel, setResultPanel] = useState(null);  // { title, text, loading }
 
+  // ----- expiry options (computed client-side to avoid SSR/static hydration drift) -----
+  const [expiryOptions, setExpiryOptions] = useState([]);
+
   // Load persisted keys on mount.
   useEffect(() => {
     try {
       setFinvizKey(localStorage.getItem(KEY_FINVIZ) || "");
       setAnthropicKey(localStorage.getItem(KEY_ANTHROPIC) || "");
     } catch {}
+    // Compute next 6 monthly expiries from today — client-side because the
+    // page is statically prerendered; build-time `new Date()` would freeze
+    // the dropdown at deploy time.
+    setExpiryOptions(computeExpiryOptions(new Date(), 6));
   }, []);
 
   function saveFinvizKey(v) {
@@ -458,14 +505,17 @@ export default function OptionsPage() {
           />
         </label>
         <label style={S.lbl}>
-          Expiry (YYYY-MM-DD, опционально)
-          <input
+          Expiry
+          <select
             style={S.inp}
             value={expiry}
-            placeholder="2026-06-19"
             onChange={(e) => setExpiry(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && load()}
-          />
+          >
+            <option value="">Все даты</option>
+            {expiryOptions.map((o) => (
+              <option key={o.iso} value={o.iso}>{o.label}</option>
+            ))}
+          </select>
         </label>
         <button style={S.btn} onClick={load} disabled={loading}>
           {loading ? "Загрузка…" : "Загрузить"}
