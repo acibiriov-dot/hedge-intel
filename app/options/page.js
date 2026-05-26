@@ -23,6 +23,26 @@ const HORIZON_OPTIONS = [
   { v: "quarter", label: "3 месяца",  maxDays: 90 },
 ];
 
+// Three scan modes — each tab is a separate entry point that runs a scan
+// with its own filter / sort. `anomalies` is the legacy flow.
+const SCAN_MODES = [
+  {
+    v: "highprob",
+    label: "🎯 Высокая вероятность",
+    title: "Контракты с вероятностью прибыли 85%+",
+  },
+  {
+    v: "balanced",
+    label: "⚖️ Баланс",
+    title: "Контракты с балансом риска и прибыли",
+  },
+  {
+    v: "anomalies",
+    label: "⚡ Аномалии",
+    title: "Аномальная активность крупных игроков",
+  },
+];
+
 // ---------- date helpers ----------
 
 function num(v) {
@@ -252,7 +272,14 @@ ${SHARED_RULES}
 Когда входить: [конкретное условие]
 Когда выходить: [конкретное условие]
 Срок: [точное количество дней до Expiry]
-ВАЖНО: [главный риск одним предложением]`;
+ВАЖНО: [главный риск одним предложением]
+
+ПОДВОДНЫЕ КАМНИ:
+1. Спред: [(Ask-Bid)/((Ask+Bid)/2) × 100]%. Если больше 20% — пиши ВЫСОКИЙ — теряешь [%]% при входе
+2. Временной распад: $[Theta × 100 × дней до Expiry]. Если больше 50% стоимости входа — пиши ОПАСНО
+3. Ликвидность: OI [число]. Если меньше 100 — пиши НИЗКАЯ — сложно выйти
+4. Волатильность: IV [число]%. Если больше 60% — пиши ВЫСОКАЯ IV — риск обвала волатильности после события
+5. Итог: СТОИТ ВХОДИТЬ / ОСТОРОЖНО / НЕ РЕКОМЕНДУЮ — одно слово и одна причина`;
 
 const INTERPRET_SYSTEM = `Ты профессиональный опционный трейдер. Все расчёты ТОЛЬКО на основе переданных данных.
 
@@ -309,11 +336,12 @@ export default function OptionsPage() {
   const [expiryOptions, setExpiryOptions] = useState([]);
 
   // ----- watchlist scan -----
-  const [anomalies, setAnomalies]       = useState([]);  // global top-10 by score
+  const [anomalies, setAnomalies]       = useState([]);  // global top-10 by mode-specific sort
   const [tickerStats, setTickerStats]   = useState({});
   const [scanLoading, setScanLoading]   = useState(false);
   const [scanProgress, setScanProgress] = useState(null);
   const [scanError, setScanError]       = useState("");
+  const [scanMode, setScanMode]         = useState("anomalies");  // which mode produced current `anomalies`
 
   // ----- Claude interaction -----
   const [busyInterpretId, setBusyInterpretId] = useState(null);
@@ -372,10 +400,58 @@ export default function OptionsPage() {
     setSingleLoading(false);
   }
 
+  // Per-mode contract filter + scoring. Returns array of { row, score, signals, reasons }.
+  function pickContractsForMode(chainRows, stats, mode, today) {
+    if (mode === "highprob") {
+      // High-probability: deep ITM, low IV, real bid, decent liquidity.
+      const picks = chainRows.filter((r) => {
+        const delta = Math.abs(num(r["Delta"]));
+        const iv    = num(r["IV"]);
+        const bid   = num(r["Bid"]);
+        const oi    = num(r["Open Int."]);
+        return delta > 0.85 && iv < 50 && bid > 0 && oi > 100;
+      });
+      // Compute percentiles + score over the filtered subset (informational —
+      // sort is by Delta in this mode).
+      const { p5, p10 } = chainPercentiles(picks);
+      return picks.map((row) => ({
+        row,
+        score:   scoreContract(row, p5, p10, today),
+        signals: rowSignals(row, stats),
+        reasons: scoreReasons(row, p5, p10, today),
+      }));
+    }
+    if (mode === "balanced") {
+      // Balanced: moderate Delta, 20-60 days out, real bid, decent liquidity.
+      const picks = chainRows.filter((r) => {
+        const delta = Math.abs(num(r["Delta"]));
+        const bid   = num(r["Bid"]);
+        const oi    = num(r["Open Int."]);
+        const exp   = parseFinvizExpiry(r["Expiry"]);
+        const days  = exp ? daysBetween(exp, today) : null;
+        return (
+          delta >= 0.5 && delta <= 0.7 &&
+          bid > 0 && oi > 50 &&
+          days !== null && days >= 20 && days <= 60
+        );
+      });
+      const { p5, p10 } = chainPercentiles(picks);
+      return picks.map((row) => ({
+        row,
+        score:   scoreContract(row, p5, p10, today),
+        signals: rowSignals(row, stats),
+        reasons: scoreReasons(row, p5, p10, today),
+      }));
+    }
+    // Default: anomalies (existing logic, horizon-aware).
+    return detectAnomalies(chainRows, stats, horizon, today);
+  }
+
   // ----- watchlist scan -----
-  async function scanWatchlist() {
+  async function scanWatchlist(mode) {
     setScanError("");
     if (!finvizKey.trim()) { setScanError("Введи Finviz Elite token"); return; }
+    setScanMode(mode);
     setScanLoading(true);
     setAnomalies([]);
     setTickerStats({});
@@ -383,8 +459,8 @@ export default function OptionsPage() {
 
     // Parallel fetches; per-ticker failure doesn't abort the scan.
     // NOTE: scan never passes the `expiry` param — we want the FULL chain so
-    // PCR and OI-magnet calcs are aggregate. Horizon filtering is applied
-    // CLIENT-side after we have all the data.
+    // PCR and OI-magnet calcs are aggregate. Mode-specific filtering is
+    // applied CLIENT-side after we have all the data.
     let done = 0;
     const fetchOne = async (t) => {
       try {
@@ -414,18 +490,26 @@ export default function OptionsPage() {
     for (const { ticker: tk, rows: chainRows } of results) {
       if (!chainRows.length) continue;
       const stats = chainStats(chainRows);
-      const scored = detectAnomalies(chainRows, stats, horizon, today);
+      const picks = pickContractsForMode(chainRows, stats, mode, today);
       statsMap[tk] = {
         pcr:           stats.pcr,
         maxOIStrike:   stats.maxOIStrike,
         maxOI:         stats.maxOI,
-        anomalyCount:  scored.length,
-        dominant:      dominantSignal(stats, scored.length),
+        anomalyCount:  picks.length,
+        dominant:      dominantSignal(stats, picks.length),
       };
-      for (const a of scored) all.push({ ticker: tk, ...a });
+      for (const a of picks) all.push({ ticker: tk, ...a });
     }
-    all.sort((a, b) => b.score - a.score);
-    // Global top-N across all watchlist tickers.
+
+    // Mode-specific global sort:
+    // - highprob → by |Delta| desc (probability of ITM)
+    // - balanced + anomalies → by Score desc (existing scoring)
+    if (mode === "highprob") {
+      all.sort((a, b) => Math.abs(num(b.row["Delta"])) - Math.abs(num(a.row["Delta"])));
+    } else {
+      all.sort((a, b) => b.score - a.score);
+    }
+
     setAnomalies(all.slice(0, TOP_N));
     setTickerStats(statsMap);
     setScanProgress(null);
@@ -582,22 +666,33 @@ export default function OptionsPage() {
         </span>
       </div>
 
-      {/* ===== Section 1: Watchlist scan ===== */}
+      {/* ===== Section 1: Watchlist scan — three modes ===== */}
       <h2 style={S.h2}>1 · Watchlist скан</h2>
       <p style={S.note}>
-        Скоринг 0-100: Vol/OI &gt; 10× (+40), &gt; 5× (+25) · IV &gt; 80% (+20), &gt; 50% (+10) ·
-        Vol топ-5% (+20), топ-10% (+10) · экспирация &gt; 7 дней (+10).
-        Top-{TOP_N} по Score. Тикеры: {WATCHLIST.join(", ")}.
+        Тикеры: {WATCHLIST.join(", ")}. Выбери режим — скан запустится по нему.
+        Горизонт сверху применяется только в режиме <b>Аномалии</b>.
       </p>
+      <div style={S.tabRow}>
+        {SCAN_MODES.map((m) => (
+          <button
+            key={m.v}
+            style={scanMode === m.v ? S.tabActive : S.tab}
+            onClick={() => scanWatchlist(m.v)}
+            disabled={scanLoading}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
       <div style={S.row}>
-        <button style={S.btn} onClick={scanWatchlist} disabled={scanLoading}>
-          {scanLoading ? "Сканирую…" : "Сканировать watchlist"}
-        </button>
+        {scanLoading ? <span style={S.progress}>Сканирую…</span> : null}
         {scanProgress ? (
           <span style={S.progress}>{scanProgress.done}/{scanProgress.total} тикеров</span>
         ) : null}
         {anomalies.length > 0 ? (
-          <span style={S.count}>Топ-{anomalies.length} из {anomalyTickers.length} тикеров</span>
+          <span style={S.count}>
+            Топ-{anomalies.length} из {anomalyTickers.length} тикеров
+          </span>
         ) : null}
       </div>
       {scanError ? <div style={S.error}>{scanError}</div> : null}
@@ -644,7 +739,9 @@ export default function OptionsPage() {
       {/* Top-3 spotlight (subset of top-10) */}
       {anomalies.length > 0 ? (
         <>
-          <h3 style={S.h3Section}>Топ-3 интересных аномалии</h3>
+          <h3 style={S.h3Section}>
+            {SCAN_MODES.find((m) => m.v === scanMode)?.title || "Топ-3"}
+          </h3>
           <div style={S.spotGrid}>
             {anomalies.slice(0, 3).map((a, i) => {
               const aId = `spot-${a.ticker}-${i}`;
@@ -877,6 +974,11 @@ const S = {
   horizonLabel:    { color: "#aaa", fontSize: 12 },
   horizonBtn:      { padding: "6px 14px", background: "#1a1c20", color: "#aaa", border: "1px solid #2a2d33", borderRadius: 4, cursor: "pointer", fontSize: 12 },
   horizonBtnActive:{ padding: "6px 14px", background: "#3b82f6", color: "#fff", border: "1px solid #3b82f6", borderRadius: 4, cursor: "pointer", fontSize: 12, fontWeight: 600 },
+
+  // scan-mode tabs (replace the single "Сканировать" button)
+  tabRow:    { display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" },
+  tab:       { padding: "10px 18px", background: "#1a1c20", color: "#aaa", border: "1px solid #2a2d33", borderRadius: 6, cursor: "pointer", fontSize: 13, fontWeight: 500 },
+  tabActive: { padding: "10px 18px", background: "#3b82f6", color: "#fff", border: "1px solid #3b82f6", borderRadius: 6, cursor: "pointer", fontSize: 13, fontWeight: 700 },
 
   count:      { color: "#666", fontSize: 12 },
   progress:   { color: "#3b82f6", fontSize: 12, fontWeight: 500 },
