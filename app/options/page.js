@@ -26,21 +26,10 @@ const HORIZON_OPTIONS = [
 // Three scan modes — each tab is a separate entry point that runs a scan
 // with its own filter / sort. `anomalies` is the legacy flow.
 const SCAN_MODES = [
-  {
-    v: "highprob",
-    label: "🎯 Высокая вероятность",
-    title: "Контракты с вероятностью прибыли 85%+",
-  },
-  {
-    v: "balanced",
-    label: "⚖️ Баланс",
-    title: "Контракты с балансом риска и прибыли",
-  },
-  {
-    v: "anomalies",
-    label: "⚡ Аномалии",
-    title: "Аномальная активность крупных игроков",
-  },
+  { v: "highprob",   label: "🎯 Высокая вероятность", title: "Контракты с вероятностью прибыли 85%+" },
+  { v: "balanced",   label: "⚖️ Баланс",             title: "Контракты с балансом риска и прибыли" },
+  { v: "anomalies",  label: "⚡ Аномалии",            title: "Аномальная активность крупных игроков" },
+  { v: "strategies", label: "🧠 Стратегии",           title: "Найденные возможности для 6 опционных стратегий" },
 ];
 
 // ---------- date helpers ----------
@@ -296,6 +285,262 @@ ${SHARED_RULES}
  * Filter `rows` to the horizon window + today-exclude rule, then score each
  * survivor. Returns ALL scored contracts (caller decides top-N).
  */
+// ---------- Strategy analyzers (6 patterns; each returns array of opportunity cards) ----------
+//
+// Each opportunity has the shape:
+//   { id, strategy, icon, name, ticker, signalParams, construction, contracts }
+// where `contracts` are raw Finviz rows to feed buildStrategy for the detailed analysis.
+
+function _groupByExpiry(rows) {
+  const m = {};
+  for (const r of rows) {
+    const e = r["Expiry"];
+    if (!e) continue;
+    (m[e] = m[e] || []).push(r);
+  }
+  return m;
+}
+
+function _meanIV(rows) {
+  const ivs = rows.map((r) => num(r["IV"])).filter((v) => Number.isFinite(v) && v > 0);
+  if (!ivs.length) return 0;
+  return ivs.reduce((a, b) => a + b, 0) / ivs.length;
+}
+
+function _avgIVByType(rows, t) {
+  return _meanIV(rows.filter((r) => (r["Type"] || "").toLowerCase() === t));
+}
+
+/** (1) IV SPIKE — Short Strangle on contracts with IV > chain mean × 1.5. */
+function findIvSpikeOpportunities(chainsByTicker) {
+  const out = [];
+  for (const [ticker, rows] of Object.entries(chainsByTicker)) {
+    if (rows.length < 10) continue;
+    const byExpiry = _groupByExpiry(rows);
+    for (const [expiry, contracts] of Object.entries(byExpiry)) {
+      if (contracts.length < 5) continue;
+      const mean = _meanIV(contracts);
+      if (mean <= 0) continue;
+      const spikes = contracts.filter((c) => {
+        const iv = num(c["IV"]);
+        return Number.isFinite(iv) && iv > mean * 1.5;
+      });
+      if (!spikes.length) continue;
+      const maxIV = Math.max(...spikes.map((c) => num(c["IV"])).filter(Number.isFinite));
+      const premium = spikes.reduce((s, c) => s + (num(c["Bid"]) || 0) * 100, 0);
+      out.push({
+        id: `iv_spike-${ticker}-${expiry}`,
+        strategy: "iv_spike",
+        icon: "🌋",
+        name: "IV SPIKE — Short Strangle",
+        ticker, expiry,
+        signalParams: `mean IV ${mean.toFixed(1)}% · спайк до ${maxIV.toFixed(1)}% (×${(maxIV / mean).toFixed(2)}) · премия ~$${premium.toFixed(0)}`,
+        construction: "Продай OTM call и OTM put на этой экспирации — забираешь премию от обвала IV.",
+        contracts: spikes.slice(0, 4),
+      });
+    }
+  }
+  return out;
+}
+
+/** (2) SKEW TRADING — Risk Reversal when put IV > call IV × 1.3 per expiry. */
+function findSkewOpportunities(chainsByTicker) {
+  const out = [];
+  for (const [ticker, rows] of Object.entries(chainsByTicker)) {
+    const byExpiry = _groupByExpiry(rows);
+    for (const [expiry, contracts] of Object.entries(byExpiry)) {
+      const calls = contracts.filter((c) => (c["Type"] || "").toLowerCase() === "call");
+      const puts  = contracts.filter((c) => (c["Type"] || "").toLowerCase() === "put");
+      if (calls.length < 3 || puts.length < 3) continue;
+      const ivCall = _meanIV(calls);
+      const ivPut  = _meanIV(puts);
+      if (ivCall <= 0 || ivPut <= 0) continue;
+      if (ivPut <= ivCall * 1.3) continue;
+      // Take highest-IV put + median call for the risk reversal sample.
+      const topPut  = [...puts].sort((a, b) => num(b["IV"]) - num(a["IV"]))[0];
+      const topCall = [...calls].sort((a, b) => num(b["Volume"]) - num(a["Volume"]))[0];
+      out.push({
+        id: `skew-${ticker}-${expiry}`,
+        strategy: "skew",
+        icon: "📐",
+        name: "SKEW — Risk Reversal",
+        ticker, expiry,
+        signalParams: `IV puts ${ivPut.toFixed(1)}% vs calls ${ivCall.toFixed(1)}% · диспаритет +${(((ivPut / ivCall) - 1) * 100).toFixed(0)}%`,
+        construction: "Продай дорогой OTM put, купи дешёвый OTM call — синтетически длинная позиция от мисспрайсинга страха.",
+        contracts: [topPut, topCall].filter(Boolean),
+      });
+    }
+  }
+  return out;
+}
+
+/** (3) VOLATILITY ARBITRAGE — Calendar Spread when near IV > far IV × 1.4. */
+function findVolArbOpportunities(chainsByTicker) {
+  const out = [];
+  for (const [ticker, rows] of Object.entries(chainsByTicker)) {
+    const byExpiry = _groupByExpiry(rows);
+    // Sort expiries by date so "near" / "far" mean what they should.
+    const sorted = Object.entries(byExpiry)
+      .map(([e, list]) => ({ expiry: e, list, date: parseFinvizExpiry(e), iv: _meanIV(list) }))
+      .filter((x) => x.date && x.iv > 0)
+      .sort((a, b) => a.date - b.date);
+    if (sorted.length < 2) continue;
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const near = sorted[i], far = sorted[i + 1];
+      if (near.iv <= far.iv * 1.4) continue;
+      // Use the most active (by volume) contract of each leg.
+      const nearTop = [...near.list].sort((a, b) => num(b["Volume"]) - num(a["Volume"]))[0];
+      const farTop  = [...far.list].sort((a, b) => num(b["Volume"]) - num(a["Volume"]))[0];
+      out.push({
+        id: `volarb-${ticker}-${near.expiry}-${far.expiry}`,
+        strategy: "vol_arb",
+        icon: "⏳",
+        name: "VOL ARB — Calendar Spread",
+        ticker,
+        signalParams: `ближняя ${near.expiry} IV ${near.iv.toFixed(1)}% vs дальняя ${far.expiry} IV ${far.iv.toFixed(1)}% (×${(near.iv / far.iv).toFixed(2)})`,
+        construction: "Продай ближнюю экспирацию (дорогая IV), купи дальнюю (дешёвая IV) — заработок на схлопывании near-term volatility.",
+        contracts: [nearTop, farTop].filter(Boolean),
+        expiry: `${near.expiry} → ${far.expiry}`,
+      });
+      break; // one calendar pair per ticker; closest qualifying pair wins
+    }
+  }
+  return out;
+}
+
+/** (4) MAX PAIN — Iron Butterfly anchored at strike with max combined call+put OI. */
+function findMaxPainOpportunities(chainsByTicker) {
+  const out = [];
+  for (const [ticker, rows] of Object.entries(chainsByTicker)) {
+    const byExpiry = _groupByExpiry(rows);
+    for (const [expiry, contracts] of Object.entries(byExpiry)) {
+      if (contracts.length < 6) continue;
+      const oiByStrike = {};
+      for (const c of contracts) {
+        const k = String(c["Strike"] || "");
+        if (!k) continue;
+        const oi = num(c["Open Int."]);
+        if (!Number.isFinite(oi)) continue;
+        oiByStrike[k] = (oiByStrike[k] || 0) + oi;
+      }
+      const entries = Object.entries(oiByStrike).sort((a, b) => b[1] - a[1]);
+      if (!entries.length) continue;
+      const [topStrike, topOI] = entries[0];
+      if (topOI < 500) continue;  // ignore weak magnets
+      // Pull the call + put at that strike as anchor legs.
+      const legs = contracts.filter((c) => String(c["Strike"]) === topStrike);
+      out.push({
+        id: `maxpain-${ticker}-${expiry}-${topStrike}`,
+        strategy: "max_pain",
+        icon: "🧲",
+        name: "MAX PAIN — Iron Butterfly",
+        ticker, expiry,
+        signalParams: `Max-Pain страйк $${topStrike} · суммарный OI ${topOI.toLocaleString("ru-RU")}`,
+        construction: `Iron Butterfly вокруг $${topStrike} — цена тянется к этому страйку к экспирации, продаёшь премию на схождении.`,
+        contracts: legs,
+      });
+    }
+  }
+  return out;
+}
+
+/** (5) EARNINGS PLAY — Short Straddle ATM when |day change| > 3% on the underlying. */
+function findEarningsPlayOpportunities(chainsByTicker, quotesByTicker) {
+  const out = [];
+  for (const [ticker, rows] of Object.entries(chainsByTicker)) {
+    const quote = quotesByTicker[ticker] || [];
+    if (quote.length < 2) continue;
+    const last = num(quote[quote.length - 1]?.Close);
+    const prev = num(quote[quote.length - 2]?.Close);
+    if (!Number.isFinite(last) || !Number.isFinite(prev) || prev === 0) continue;
+    const change = ((last - prev) / prev) * 100;
+    if (Math.abs(change) < 3) continue;
+    // Find ATM strike — closest to today's close.
+    const strikes = [...new Set(rows.map((r) => num(r["Strike"])).filter(Number.isFinite))];
+    if (!strikes.length) continue;
+    const atmStrike = strikes.reduce((best, s) => (Math.abs(s - last) < Math.abs(best - last) ? s : best));
+    const atmContracts = rows.filter((r) => num(r["Strike"]) === atmStrike);
+    if (atmContracts.length < 2) continue;
+    const atmCall = atmContracts.find((c) => (c["Type"] || "").toLowerCase() === "call");
+    const atmPut  = atmContracts.find((c) => (c["Type"] || "").toLowerCase() === "put");
+    if (!atmCall || !atmPut) continue;
+    const premium = ((num(atmCall["Bid"]) || 0) + (num(atmPut["Bid"]) || 0)) * 100;
+    out.push({
+      id: `earnings-${ticker}`,
+      strategy: "earnings",
+      icon: "📊",
+      name: "EARNINGS PLAY — Short Straddle",
+      ticker,
+      expiry: atmCall["Expiry"],
+      signalParams: `цена $${last.toFixed(2)} · 1-day change ${change.toFixed(2)}% · ATM $${atmStrike} · премия ~$${premium.toFixed(0)}`,
+      construction: "Продай ATM call и ATM put — забираешь премию когда движение уже произошло и IV должна сходить.",
+      contracts: [atmCall, atmPut],
+    });
+  }
+  return out;
+}
+
+/** (6) GAMMA SCALPING — Long Straddle on ATM contracts with high gamma (>0.05). */
+function findGammaScalpOpportunities(chainsByTicker) {
+  const out = [];
+  for (const [ticker, rows] of Object.entries(chainsByTicker)) {
+    // Filter to ATM-ish, high-gamma contracts.
+    const candidates = rows.filter((r) => {
+      const delta = Math.abs(num(r["Delta"]));
+      const gamma = num(r["Gamma"]);
+      return Number.isFinite(delta) && Number.isFinite(gamma)
+        && delta >= 0.45 && delta <= 0.55
+        && gamma > 0.05;
+    });
+    if (!candidates.length) continue;
+    // Group by (expiry, strike) and pull call+put pairs for straddle.
+    const seen = new Set();
+    for (const c of candidates.sort((a, b) => num(b["Gamma"]) - num(a["Gamma"]))) {
+      const key = `${c["Expiry"]}-${c["Strike"]}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const pair = rows.filter((r) =>
+        r["Expiry"] === c["Expiry"] && String(r["Strike"]) === String(c["Strike"])
+      );
+      const atmCall = pair.find((r) => (r["Type"] || "").toLowerCase() === "call");
+      const atmPut  = pair.find((r) => (r["Type"] || "").toLowerCase() === "put");
+      if (!atmCall || !atmPut) continue;
+      const cost = ((num(atmCall["Ask"]) || 0) + (num(atmPut["Ask"]) || 0)) * 100;
+      const iv  = num(c["IV"]) || 0;
+      const close = num(c["Last Close"]) || 0;
+      const exp = parseFinvizExpiry(c["Expiry"]);
+      const days = exp ? daysBetween(exp, new Date()) : 30;
+      const expectedMove = close * (iv / 100) * Math.sqrt(days / 365);
+      out.push({
+        id: `gamma-${ticker}-${c["Expiry"]}-${c["Strike"]}`,
+        strategy: "gamma",
+        icon: "⚡",
+        name: "GAMMA SCALPING — Long Straddle",
+        ticker,
+        expiry: c["Expiry"],
+        signalParams: `страйк $${c["Strike"]} · Γ ${num(c["Gamma"]).toFixed(3)} · стоимость $${cost.toFixed(0)} · ожидаемое движение ±$${expectedMove.toFixed(2)}`,
+        construction: "Купи ATM call + ATM put — заработок если базовый актив сильно сдвинется в любую сторону.",
+        contracts: [atmCall, atmPut],
+      });
+      // One opportunity per ticker — the highest-gamma pair.
+      break;
+    }
+  }
+  return out;
+}
+
+/** Aggregator — runs all 6 analyzers, returns flat list of opportunities. */
+function findAllStrategies(chainsByTicker, quotesByTicker) {
+  return [
+    ...findIvSpikeOpportunities(chainsByTicker),
+    ...findSkewOpportunities(chainsByTicker),
+    ...findVolArbOpportunities(chainsByTicker),
+    ...findMaxPainOpportunities(chainsByTicker),
+    ...findEarningsPlayOpportunities(chainsByTicker, quotesByTicker),
+    ...findGammaScalpOpportunities(chainsByTicker),
+  ];
+}
+
 function detectAnomalies(rows, stats, horizonKey, today) {
   if (!Array.isArray(rows) || rows.length === 0) return [];
   const inWindow = rows.filter((r) => inHorizon(parseFinvizExpiry(r["Expiry"]), today, horizonKey));
@@ -342,6 +587,9 @@ export default function OptionsPage() {
   const [scanProgress, setScanProgress] = useState(null);
   const [scanError, setScanError]       = useState("");
   const [scanMode, setScanMode]         = useState("anomalies");  // which mode produced current `anomalies`
+  // Strategies mode produces a different data shape — keep separate state.
+  const [strategies, setStrategies]     = useState([]);
+  const [busyStratOppId, setBusyStratOppId] = useState(null);
 
   // ----- Claude interaction -----
   const [busyInterpretId, setBusyInterpretId] = useState(null);
@@ -454,8 +702,11 @@ export default function OptionsPage() {
     setScanMode(mode);
     setScanLoading(true);
     setAnomalies([]);
+    setStrategies([]);
     setTickerStats({});
-    setScanProgress({ done: 0, total: WATCHLIST.length });
+    // Strategies mode needs both options + quote data → progress shows two batches.
+    const totalUnits = mode === "strategies" ? WATCHLIST.length * 2 : WATCHLIST.length;
+    setScanProgress({ done: 0, total: totalUnits });
 
     // Parallel fetches; per-ticker failure doesn't abort the scan.
     // NOTE: scan never passes the `expiry` param — we want the FULL chain so
@@ -474,15 +725,69 @@ export default function OptionsPage() {
           ? { ticker: t, rows: data.rows }
           : { ticker: t, rows: [] };
         done += 1;
-        setScanProgress({ done, total: WATCHLIST.length });
+        setScanProgress({ done, total: totalUnits });
         return out;
       } catch {
         done += 1;
-        setScanProgress({ done, total: WATCHLIST.length });
+        setScanProgress({ done, total: totalUnits });
         return { ticker: t, rows: [] };
       }
     };
     const results = await Promise.all(WATCHLIST.map(fetchOne));
+
+    // ----- Strategies mode branch -----
+    if (mode === "strategies") {
+      // Need quote (EOD candles) for EARNINGS_PLAY analyzer.
+      const fetchQuote = async (t) => {
+        try {
+          const res = await fetch("/api/finviz-quote", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ finvizKey: finvizKey.trim(), ticker: t }),
+          });
+          const data = await res.json();
+          const out = res.ok && !data.error && Array.isArray(data.rows)
+            ? { ticker: t, rows: data.rows }
+            : { ticker: t, rows: [] };
+          done += 1;
+          setScanProgress({ done, total: totalUnits });
+          return out;
+        } catch {
+          done += 1;
+          setScanProgress({ done, total: totalUnits });
+          return { ticker: t, rows: [] };
+        }
+      };
+      const quoteResults = await Promise.all(WATCHLIST.map(fetchQuote));
+
+      const chainsByTicker = {};
+      const quotesByTicker = {};
+      for (const r of results)      chainsByTicker[r.ticker] = r.rows;
+      for (const r of quoteResults) quotesByTicker[r.ticker] = r.rows;
+
+      const opportunities = findAllStrategies(chainsByTicker, quotesByTicker);
+
+      // Per-ticker summary: count opportunities per ticker, keep chain stats too.
+      const statsMap = {};
+      for (const { ticker: tk, rows: chainRows } of results) {
+        if (!chainRows.length) continue;
+        const stats = chainStats(chainRows);
+        const oppCount = opportunities.filter((o) => o.ticker === tk).length;
+        statsMap[tk] = {
+          pcr: stats.pcr,
+          maxOIStrike: stats.maxOIStrike,
+          maxOI: stats.maxOI,
+          anomalyCount: oppCount,
+          dominant: dominantSignal(stats, oppCount),
+        };
+      }
+
+      setStrategies(opportunities);
+      setTickerStats(statsMap);
+      setScanProgress(null);
+      setScanLoading(false);
+      return;
+    }
 
     const today = new Date();
     const all = [];
@@ -557,7 +862,7 @@ export default function OptionsPage() {
   }
 
   // ----- Claude strategy: plain-language template with real-money examples -----
-  async function buildStrategy(t, contractsList = null) {
+  async function buildStrategy(t, contractsList = null, strategyHint = null) {
     if (!anthropicKey.trim()) {
       setResultPanel({ title: "Ошибка", text: "Введи Anthropic API key наверху страницы.", loading: false });
       return;
@@ -581,12 +886,15 @@ export default function OptionsPage() {
     )).join("\n\n");
 
     const userMsg = [
+      ...(strategyHint ? [`КАНДИДАТНАЯ СТРАТЕГИЯ: ${strategyHint}`, ""] : []),
       `Тикер: $${t}`,
-      `Топ-${top5.length} аномальных контрактов (ВСЕ колонки из Finviz CSV):`,
+      `Топ-${top5.length} контрактов (ВСЕ колонки из Finviz CSV):`,
       "",
       contractsBlock,
       "",
-      "Выбери лучший контракт для стратегии и предложи план по шаблону из system prompt.",
+      strategyHint
+        ? "Построй детальный план для указанной кандидатной стратегии. Используй ТОЛЬКО переданные контракты."
+        : "Выбери лучший контракт для стратегии и предложи план по шаблону из system prompt.",
       "Все цифры в стратегии — точные значения из данных или расчёты по правилам.",
     ].join("\n");
 
@@ -736,8 +1044,58 @@ export default function OptionsPage() {
         </div>
       ) : null}
 
-      {/* Top-3 spotlight (subset of top-10) */}
-      {anomalies.length > 0 ? (
+      {/* Strategies mode: opportunity cards instead of the spotlight/table */}
+      {scanMode === "strategies" && strategies.length > 0 ? (
+        <>
+          <h3 style={S.h3Section}>
+            {SCAN_MODES.find((m) => m.v === "strategies")?.title} · найдено: {strategies.length}
+          </h3>
+          <div style={S.stratGrid}>
+            {strategies.map((opp) => {
+              const wrapped = opp.contracts.map((c) => ({
+                row: c, score: 0, signals: "", reasons: [opp.name],
+              }));
+              const isBusy = busyStratOppId === opp.id;
+              return (
+                <div key={opp.id} style={S.stratCard}>
+                  <div style={S.stratHead}>
+                    <span style={S.stratIcon}>{opp.icon}</span>
+                    <span style={S.stratName}>{opp.name}</span>
+                  </div>
+                  <div style={S.stratTicker}>
+                    ${opp.ticker}{opp.expiry ? ` · ${opp.expiry}` : ""}
+                  </div>
+                  <div style={S.stratParams}>{opp.signalParams}</div>
+                  <div style={S.stratConstruction}>{opp.construction}</div>
+                  <button
+                    style={{ ...S.btnSm, marginTop: 10, width: "100%" }}
+                    onClick={async () => {
+                      setBusyStratOppId(opp.id);
+                      try {
+                        await buildStrategy(opp.ticker, wrapped, opp.name);
+                      } finally {
+                        setBusyStratOppId(null);
+                      }
+                    }}
+                    disabled={isBusy}
+                  >
+                    {isBusy ? "Строю…" : "Построить детальную стратегию"}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      ) : null}
+
+      {scanMode === "strategies" && !scanLoading && strategies.length === 0 && Object.keys(tickerStats).length > 0 ? (
+        <div style={S.note}>
+          Стратегических возможностей не найдено. Попробуй позже или после event-driven дня.
+        </div>
+      ) : null}
+
+      {/* Top-3 spotlight (anomalies/highprob/balanced modes) — subset of top-10 */}
+      {scanMode !== "strategies" && anomalies.length > 0 ? (
         <>
           <h3 style={S.h3Section}>
             {SCAN_MODES.find((m) => m.v === scanMode)?.title || "Топ-3"}
@@ -771,8 +1129,8 @@ export default function OptionsPage() {
         </>
       ) : null}
 
-      {/* Top-N anomaly table */}
-      {anomalies.length > 0 ? (
+      {/* Top-N anomaly table — hidden in strategies mode */}
+      {scanMode !== "strategies" && anomalies.length > 0 ? (
         <div style={S.tableWrap}>
           <table style={S.table}>
             <thead>
@@ -979,6 +1337,16 @@ const S = {
   tabRow:    { display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" },
   tab:       { padding: "10px 18px", background: "#1a1c20", color: "#aaa", border: "1px solid #2a2d33", borderRadius: 6, cursor: "pointer", fontSize: 13, fontWeight: 500 },
   tabActive: { padding: "10px 18px", background: "#3b82f6", color: "#fff", border: "1px solid #3b82f6", borderRadius: 6, cursor: "pointer", fontSize: 13, fontWeight: 700 },
+
+  // Strategy opportunity cards (🧠 Стратегии mode)
+  stratGrid:        { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12, marginBottom: 20 },
+  stratCard:        { background: "#161820", border: "1px solid #d97706", borderRadius: 8, padding: "14px 16px", display: "flex", flexDirection: "column" },
+  stratHead:        { display: "flex", alignItems: "center", gap: 8, marginBottom: 8 },
+  stratIcon:        { fontSize: 22 },
+  stratName:        { color: "#fff", fontWeight: 700, fontSize: 13, letterSpacing: 0.3 },
+  stratTicker:      { color: "#3b82f6", fontSize: 14, fontWeight: 600, marginBottom: 6 },
+  stratParams:      { color: "#bbb", fontSize: 12, marginBottom: 8, fontVariantNumeric: "tabular-nums" },
+  stratConstruction:{ color: "#d97706", fontSize: 12, fontStyle: "italic", lineHeight: 1.4, flex: 1 },
 
   count:      { color: "#666", fontSize: 12 },
   progress:   { color: "#3b82f6", fontSize: 12, fontWeight: 500 },
