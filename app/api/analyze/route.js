@@ -11,6 +11,17 @@ export async function POST(request) {
       ? [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }]
       : undefined;
 
+    // Prepend today's date to the system prompt so Claude grounds expiry /
+    // timeframe math in the current day rather than its training cutoff.
+    // Format DD.MM.YYYY in server TZ via new Date() — equivalent to
+    // moment(...).format("DD.MM.YYYY") without adding the moment dependency.
+    const now = new Date();
+    const dd   = String(now.getDate()).padStart(2, "0");
+    const mm   = String(now.getMonth() + 1).padStart(2, "0");
+    const yyyy = now.getFullYear();
+    const dateLine = `Сегодня ${dd}.${mm}.${yyyy}. Все расчёты сроков и экспираций считай от этой даты.`;
+    const systemWithDate = `${dateLine}\n\n${system || ""}`.trim();
+
     let msgs = messages;
     let finalText = "";
     let iters = 0;
@@ -21,7 +32,7 @@ export async function POST(request) {
       const requestBody = {
         model: "claude-sonnet-4-6",
         max_tokens: 6000,
-        system: system,
+        system: systemWithDate,
         messages: msgs,
       };
 
