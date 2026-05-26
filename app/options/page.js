@@ -188,6 +188,80 @@ function scoreReasons(row, p5, p10, today) {
   return out;
 }
 
+/** Serialize ONE contract as plain text with all 18 Finviz CSV columns.
+ *  Used by both interpret() and buildStrategy() so Claude can do math on
+ *  Bid/Ask, Delta, Theta, etc. */
+function contractFullData(c) {
+  return [
+    `Contract Name: ${c["Contract Name"] || ""}`,
+    `Last Trade: ${c["Last Trade"] || ""}`,
+    `Expiry: ${c["Expiry"] || ""}`,
+    `Strike: $${c["Strike"] || ""}`,
+    `Last Close: $${c["Last Close"] || ""}`,
+    `Bid: $${c["Bid"] || ""}`,
+    `Ask: $${c["Ask"] || ""}`,
+    `Change $: ${c["Change $"] || ""}`,
+    `Change %: ${c["Change %"] || ""}`,
+    `Volume: ${c["Volume"] || ""}`,
+    `Open Int.: ${c["Open Int."] || ""}`,
+    `Type: ${c["Type"] || ""}`,
+    `IV: ${c["IV"] || ""}`,
+    `Delta: ${c["Delta"] || ""}`,
+    `Gamma: ${c["Gamma"] || ""}`,
+    `Theta: ${c["Theta"] || ""}`,
+    `Vega: ${c["Vega"] || ""}`,
+    `Rho: ${c["Rho"] || ""}`,
+  ].join("\n");
+}
+
+// Shared rules + bans for both interpret and strategy system prompts.
+// Calculation rules let Claude convert raw greeks into money values that the
+// user template asks for ($Ask × 100, Theta × 100, Last Close × IV × √(N/365), …).
+const SHARED_RULES = `ПРАВИЛА РАСЧЁТОВ:
+- Стоимость покупки = Ask × 100
+- Стоимость продажи = Bid × 100
+- Если Bid или Ask = 0 или пустой — пиши 'нет данных', не считай
+- Delta = вероятность оказаться в деньгах (например Delta 0.35 = 35% шанс)
+- Theta = потеря в день в долларах (Theta × 100)
+- IV = ожидаемое движение актива за год в %
+- Ожидаемое движение за N дней = Last Close × IV × sqrt(N/365)
+
+ЗАПРЕЩЕНО:
+- Выдумывать любые цифры которых нет в данных
+- Использовать слова: нога, спред, дебет, кредит, leg, exercise
+- Писать markdown (никаких ## или **)
+- Округлять цены контрактов`;
+
+const STRATEGY_SYSTEM = `Ты профессиональный опционный трейдер. Все расчёты ТОЛЬКО на основе переданных данных.
+
+${SHARED_RULES}
+
+ФОРМАТ СТРАТЕГИИ строго такой:
+СТРАТЕГИЯ: [название простыми словами]
+Что делаем: [1 предложение]
+Базовый актив сейчас: $[Last Close из данных]
+Пример с деньгами:
+- Вкладываешь: $[Ask × 100, точная цифра из данных]
+- Если угадал: зарабатываешь $[расчёт] ([%] прибыли)
+- Если ошибся: теряешь $[Ask × 100] максимум
+- Потеря в день от времени: $[Theta × 100]
+- Шанс на победу: [Delta × 100]% (по данным Delta)
+Когда входить: [конкретное условие на основе данных]
+Когда выходить: [конкретное условие]
+Срок: [точное количество дней до Expiry]
+ВАЖНО: [главный риск одним предложением]`;
+
+const INTERPRET_SYSTEM = `Ты профессиональный опционный трейдер. Все расчёты ТОЛЬКО на основе переданных данных.
+
+${SHARED_RULES}
+
+ФОРМАТ ИНТЕРПРЕТАЦИИ строго такой (3 предложения, без отклонений):
+"Кто-то поставил крупную сумму на то что [тикер] [вырастет/упадёт] до $[цена из Strike] к [дата из Expiry словами].
+Объём сделки в [Volume / Open Int.]× раз больше обычного — это нестандартная активность.
+Вероятно это [хедж-фонд / крупный инвестор / маркет-мейкер] который [объяснение простыми словами одним предложением]."
+
+Не пиши вступлений, не пиши заключений. Только три предложения по шаблону.`;
+
 /**
  * Filter `rows` to the horizon window + today-exclude rule, then score each
  * survivor. Returns ALL scored contracts (caller decides top-N).
@@ -366,32 +440,14 @@ export default function OptionsPage() {
     setResultPanel({ title, text: "", loading: true });
 
     const c = a.row;
-    const vol = num(c.Volume), oi = num(c["Open Int."]);
-    const volMultiplier = (oi > 0 && vol > 0) ? (vol / oi).toFixed(1) : "?";
-
     const userMsg = [
-      "Контракт:",
       `Тикер: $${a.ticker}`,
-      `Тип: ${c.Type}`,
-      `Страйк: $${c.Strike}`,
-      `Экспирация: ${c.Expiry}`,
-      `Volume: ${c.Volume}`,
-      `Open Interest: ${c["Open Int."]}`,
-      `Volume/OI: ${volMultiplier}×`,
-      `IV: ${c.IV}`,
-      `Delta: ${c.Delta}`,
-      `Bid/Ask: ${c.Bid} / ${c.Ask}`,
       `Score: ${a.score}/100, флаги: ${a.reasons.join(", ")}`,
       "",
-      "Объясни этот контракт строго в таком формате (без markdown, без таблиц, без списков):",
+      "КОНТРАКТ — все колонки из Finviz CSV:",
+      contractFullData(c),
       "",
-      `"Кто-то поставил крупную сумму на то что $${a.ticker} [вырастет/упадёт] до $[конкретная цена] к [дата словами].`,
-      `Объём сделки в [число]× раз больше обычного — это нестандартная активность.`,
-      `Вероятно это [хедж-фонд / крупный инвестор / маркет-мейкер] который [объяснение простыми словами 1 предложением]."`,
-      "",
-      "ЗАПРЕЩЕНО использовать слова: нога, спред, дебет, кредит, премия, leg, exercise, страйк (заменяй на 'цена'), expiry (заменяй на 'дата').",
-      "ЗАПРЕЩЕНО использовать markdown (** _ # | -), таблицы, списки.",
-      "Замени плейсхолдеры реальными значениями. Не отклоняйся от шаблона.",
+      "Объясни этот контракт по шаблону из system prompt. Используй точные значения из данных.",
     ].join("\n");
 
     try {
@@ -400,7 +456,7 @@ export default function OptionsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           apiKey: anthropicKey.trim(),
-          system: "Ты — опционный трейдер. Объясняешь сделки максимально простым русским языком, как другу за чашкой кофе. Запрещён жаргон. Запрещён markdown.",
+          system: INTERPRET_SYSTEM,
           messages: [{ role: "user", content: userMsg }],
           useSearch: false,
         }),
@@ -433,37 +489,18 @@ export default function OptionsPage() {
     const title = `Стратегия для $${t} (на основе ${top5.length} аномалий)`;
     setResultPanel({ title, text: "", loading: true });
 
-    const contractsBlock = top5.map((a, i) => {
-      const c = a.row;
-      return `${i + 1}. ${c.Type} цена $${c.Strike} дата ${c.Expiry} | объём ${c.Volume}, IV ${c.IV}, delta ${c.Delta}, цена контракта ${c.Bid}/${c.Ask}`;
-    }).join("\n");
+    const contractsBlock = top5.map((a, i) => (
+      `--- Контракт ${i + 1} ---\n${contractFullData(a.row)}`
+    )).join("\n\n");
 
     const userMsg = [
       `Тикер: $${t}`,
-      `Топ-${top5.length} аномальных контрактов:`,
+      `Топ-${top5.length} аномальных контрактов (ВСЕ колонки из Finviz CSV):`,
+      "",
       contractsBlock,
       "",
-      "Предложи опционную стратегию СТРОГО в таком формате (заполни реальные значения):",
-      "",
-      "СТРАТЕГИЯ: [название простыми словами, например 'Ставка на рост' / 'Защита от падения' / 'Заработок на боковике']",
-      "",
-      "Что делаем: [1 предложение максимально просто, без жаргона]",
-      "",
-      "Пример с деньгами:",
-      "- Вкладываешь: $[X]",
-      "- Если угадал: зарабатываешь $[Y] ([Z]% прибыли)",
-      "- Если ошибся: теряешь $[X] (не больше)",
-      "- Шанс на победу: [высокий 65%+ / средний 45-65% / низкий <45%]",
-      "",
-      "Когда входить: [конкретное условие, например 'когда $TICKER коснётся $X']",
-      "Когда выходить: [конкретное условие, например 'при достижении $Y или после события Z']",
-      "Срок: [X дней / недель]",
-      "",
-      "ВАЖНО: [одно предложение о главном риске, простыми словами]",
-      "",
-      "ЗАПРЕЩЕНО использовать слова: нога, спред, дебет, кредит, leg, exercise.",
-      "ЗАПРЕЩЕНО markdown, таблицы. Только текст по шаблону выше.",
-      "Используй ТОЛЬКО переданные контракты — не выдумывай страйки/даты.",
+      "Выбери лучший контракт для стратегии и предложи план по шаблону из system prompt.",
+      "Все цифры в стратегии — точные значения из данных или расчёты по правилам.",
     ].join("\n");
 
     try {
@@ -472,7 +509,7 @@ export default function OptionsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           apiKey: anthropicKey.trim(),
-          system: "Ты — опционный стратег. Объясняешь стратегии максимально просто, как другу. Запрещён жаргон. Запрещён markdown. Только текст.",
+          system: STRATEGY_SYSTEM,
           messages: [{ role: "user", content: userMsg }],
           useSearch: false,
         }),
