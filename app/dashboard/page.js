@@ -5,14 +5,19 @@ import { useEffect, useMemo, useState } from "react";
 const KEY_ACCESS = "hi_access";
 const PASSWORD   = "okiinvest2026";
 
-// Mirror of agents/content-agent/main.py PUBLISH_WINDOW_START/END.
-// Keep in sync manually — if main.py constants move, update these too.
-const PUBLISH_WINDOW_START_MIN = 15 * 60 + 30; // 15:30 Amsterdam
-const PUBLISH_WINDOW_END_MIN   = 22 * 60;       // 22:00 Amsterdam (exclusive)
+// Dashboard displays Moscow time (Europe/Moscow, UTC+3, no DST).
+// IMPORTANT: the content-agent on the Mac mini operates on Europe/Amsterdam
+// (TIMEZONE in agents/content-agent/config.py + PUBLISH_WINDOW_START/END in
+// main.py). The dashboard is a PRESENTATION VIEW in Moscow clock — the
+// numbers below (15:30, 22:00, 07:00, 23:00) are reinterpreted as Moscow
+// clock hours. If you want the dashboard window to match the agent's actual
+// publish behavior, the agent's TIMEZONE needs to switch to Europe/Moscow too.
+const PUBLISH_WINDOW_START_MIN = 15 * 60 + 30; // 15:30 Moscow
+const PUBLISH_WINDOW_END_MIN   = 22 * 60;       // 22:00 Moscow (exclusive)
 
-// CronTrigger schedule from main.py.
-const PREMARKET_HOUR     = 7;   // 07:00 Amsterdam
-const DAILY_SUMMARY_HOUR = 23;  // 23:00 Amsterdam
+// CronTrigger schedule (numbers interpreted as Moscow clock — see note above).
+const PREMARKET_HOUR     = 7;   // 07:00 Moscow
+const DAILY_SUMMARY_HOUR = 23;  // 23:00 Moscow
 
 // Fetch interval (config.FETCH_INTERVAL_MIN default).
 const FETCH_INTERVAL_MIN = 5;
@@ -57,14 +62,15 @@ const SOURCES = [
   { id: "reddit",  name: "Reddit (PullPush)",  detail: "r/wallstreetbets velocity confirmation" },
   { id: "fmp",     name: "FMP",                detail: "financialmodelingprep.com — fundamentals & news" },
   { id: "mt",      name: "MT Newswires",       detail: "via Finviz aggregator" },
+  { id: "sec",     name: "SEC EDGAR Form 4",   detail: "Insider transactions — покупки и продажи" },
 ];
 
-// ---------- time helpers (Europe/Amsterdam-aware) ----------
+// ---------- time helpers (Europe/Moscow-aware) ----------
 
-/** Parse current Date into Amsterdam clock parts: {y, mo, d, h, m, dayOfWeek}. */
-function amsParts(d = new Date()) {
+/** Parse current Date into Moscow clock parts: {y, mo, d, h, m, dayOfWeek}. */
+function mskParts(d = new Date()) {
   const fmt = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Europe/Amsterdam",
+    timeZone: "Europe/Moscow",
     year:  "numeric", month: "2-digit", day:    "2-digit",
     hour:  "2-digit", minute: "2-digit", second: "2-digit",
     weekday: "short", hour12: false,
@@ -81,9 +87,9 @@ function amsParts(d = new Date()) {
   };
 }
 
-/** Minutes until next Amsterdam-clock hour=H minute=M. Returns {minutes, today}. */
+/** Minutes until next Moscow-clock hour=H minute=M. Returns {minutes, today}. */
 function minutesUntilNext(targetH, targetM = 0, parts = null) {
-  parts = parts || amsParts();
+  parts = parts || mskParts();
   const nowMin    = parts.h * 60 + parts.m;
   const targetMin = targetH * 60 + targetM;
   let diff = targetMin - nowMin;
@@ -100,7 +106,7 @@ function fmtDuration(totalMinutes) {
   return `${h} ч ${m} мин`;
 }
 
-/** True iff Amsterdam clock is within publish window. */
+/** True iff Moscow clock is within publish window. */
 function inPublishWindow(parts) {
   const min = parts.h * 60 + parts.m;
   return min >= PUBLISH_WINDOW_START_MIN && min < PUBLISH_WINDOW_END_MIN;
@@ -209,7 +215,7 @@ export default function Dashboard() {
     setHasAccess(false); setPasswordInput("");
   }
 
-  const parts = useMemo(() => amsParts(now), [now]);
+  const parts = useMemo(() => mskParts(now), [now]);
   const windowOpen = useMemo(() => inPublishWindow(parts), [parts]);
   const nextPremarket = useMemo(() => minutesUntilNext(PREMARKET_HOUR, 0, parts), [parts]);
   const nextSummary   = useMemo(() => minutesUntilNext(DAILY_SUMMARY_HOUR, 0, parts), [parts]);
@@ -258,10 +264,10 @@ export default function Dashboard() {
         Статус системы и быстрые действия. Данные обновляются при загрузке страницы и тикают раз в минуту.
       </p>
 
-      {/* Live header — current Amsterdam time + publish-window state */}
+      {/* Live header — current Moscow time + publish-window state */}
       <div style={{ ...S.heroBar, borderColor: windowOpen ? "#4caf50" : "#e57373" }}>
         <div style={S.heroLeft}>
-          <div style={S.heroLabel}>Сейчас в Amsterdam</div>
+          <div style={S.heroLabel}>Сейчас в Москве</div>
           <div style={S.heroClock}>{clockStr}</div>
           <div style={S.heroDate}>{dateStr} · {parts.weekday}</div>
         </div>
@@ -300,7 +306,7 @@ export default function Dashboard() {
           subtitle="Дайджест перед открытием US"
           status="scheduled"
           rows={[
-            { k: "Расписание",       v: "07:00 Amsterdam ежедневно" },
+            { k: "Расписание",       v: "07:00 Москва ежедневно" },
             { k: "Следующий запуск", v: `${nextPremarket.today ? "сегодня" : "завтра"} в 07:00` },
             { k: "Через",            v: fmtDuration(nextPremarket.minutes) },
           ]}
@@ -311,7 +317,7 @@ export default function Dashboard() {
           subtitle="Вечерний свод дня"
           status="scheduled"
           rows={[
-            { k: "Расписание",       v: "23:00 Amsterdam ежедневно" },
+            { k: "Расписание",       v: "23:00 Москва ежедневно" },
             { k: "Следующий запуск", v: `${nextSummary.today ? "сегодня" : "завтра"} в 23:00` },
             { k: "Через",            v: fmtDuration(nextSummary.minutes) },
           ]}
@@ -329,7 +335,7 @@ export default function Dashboard() {
         <StatCard
           k="Постов сегодня"
           v={tgValue(tgStats, tgError, tgLoading, (s) => s.postsToday)}
-          sub="с 00:00 Amsterdam"
+          sub="с 00:00 Москвы"
         />
         <StatCard
           k="Постов за неделю"
@@ -348,7 +354,7 @@ export default function Dashboard() {
         <StatCard
           k="Publish window"
           v={windowOpen ? "🟢 открыто" : "🔴 закрыто"}
-          sub="15:30-22:00 Amsterdam"
+          sub="15:30-22:00 Москва"
         />
       </div>
 
@@ -492,7 +498,7 @@ const S = {
   btnPrimary: { padding: "10px 24px", background: "#3b82f6", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 13, fontWeight: 700 },
   errorInline: { color: "#e57373", marginTop: 8, fontSize: 14 },
 
-  // Hero bar (Amsterdam clock + window state)
+  // Hero bar (Moscow clock + window state)
   heroBar:    { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 24, padding: "18px 24px", background: "#161820", border: "2px solid", borderRadius: 10, marginBottom: 8 },
   heroLeft:   { display: "flex", flexDirection: "column", gap: 2 },
   heroLabel:  { color: "#888", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.6 },
