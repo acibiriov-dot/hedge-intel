@@ -1,10 +1,11 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 
-// Persisted keys — shared with the main App.js so a user who set tokens there
-// doesn't have to set them again here.
-const KEY_FINVIZ    = "hi_finviz_key";
-const KEY_ANTHROPIC = "hi_anthropic_key";
+// API keys live on the server now (FINVIZ_KEY / ANTHROPIC_API_KEY env vars
+// on Vercel) — nothing key-related in localStorage.
+// Access gate for this page: localStorage["hi_access"] === "1" means unlocked.
+const KEY_ACCESS  = "hi_access";
+const PASSWORD    = "okiinvest2026";
 
 // Watchlist scan covers the 10 largest / most-traded names.
 const WATCHLIST = ["SPY", "QQQ", "NVDA", "AAPL", "MSFT", "TSLA", "IBIT", "SMH", "AMZN", "META"];
@@ -707,9 +708,10 @@ function detectAnomalies(rows, stats, horizonKey, today) {
 // ===========================================================================
 
 export default function OptionsPage() {
-  // ----- credentials -----
-  const [finvizKey, setFinvizKey]       = useState("");
-  const [anthropicKey, setAnthropicKey] = useState("");
+  // ----- access gate (page-level password) -----
+  const [hasAccess, setHasAccess] = useState(false);
+  const [passwordInput, setPasswordInput] = useState("");
+  const [passwordError, setPasswordError] = useState("");
 
   // ----- horizon filter (applies to both watchlist and single-ticker) -----
   const [horizon, setHorizon] = useState("month");
@@ -746,29 +748,35 @@ export default function OptionsPage() {
   const [busyStrategyTicker, setBusyStrategyTicker] = useState(null);
   const [resultPanel, setResultPanel] = useState(null);
 
-  // Load persisted keys + compute expiry dropdown on mount (client-only).
+  // Check access + compute expiry dropdown on mount (client-only — avoids
+  // SSR/hydration drift since localStorage is browser-only).
   useEffect(() => {
     try {
-      setFinvizKey(localStorage.getItem(KEY_FINVIZ) || "");
-      setAnthropicKey(localStorage.getItem(KEY_ANTHROPIC) || "");
+      setHasAccess(localStorage.getItem(KEY_ACCESS) === "1");
     } catch {}
     setExpiryOptions(computeExpiryOptions(new Date(), 6));
   }, []);
 
-  function saveFinvizKey(v) {
-    setFinvizKey(v);
-    try { v ? localStorage.setItem(KEY_FINVIZ, v) : localStorage.removeItem(KEY_FINVIZ); } catch {}
+  function tryLogin() {
+    if (passwordInput === PASSWORD) {
+      try { localStorage.setItem(KEY_ACCESS, "1"); } catch {}
+      setHasAccess(true);
+      setPasswordError("");
+      setPasswordInput("");
+    } else {
+      setPasswordError("Неверный пароль");
+    }
   }
-  function saveAnthropicKey(v) {
-    setAnthropicKey(v);
-    try { v ? localStorage.setItem(KEY_ANTHROPIC, v) : localStorage.removeItem(KEY_ANTHROPIC); } catch {}
+  function logout() {
+    try { localStorage.removeItem(KEY_ACCESS); } catch {}
+    setHasAccess(false);
+    setPasswordInput("");
   }
 
   // ----- single-ticker load -----
   async function load() {
     setSingleError("");
-    if (!ticker.trim())     { setSingleError("Введи тикер"); return; }
-    if (!finvizKey.trim())  { setSingleError("Введи Finviz Elite token"); return; }
+    if (!ticker.trim()) { setSingleError("Введи тикер"); return; }
     setSingleLoading(true);
     setSingleAnomalies([]);
     setSingleStats(null);
@@ -777,7 +785,6 @@ export default function OptionsPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          finvizKey: finvizKey.trim(),
           ticker: ticker.trim().toUpperCase(),
           expiry: expiry.trim(),
         }),
@@ -848,7 +855,6 @@ export default function OptionsPage() {
   // ----- watchlist scan -----
   async function scanWatchlist(mode) {
     setScanError("");
-    if (!finvizKey.trim()) { setScanError("Введи Finviz Elite token"); return; }
     setScanMode(mode);
     setScanLoading(true);
     setAnomalies([]);
@@ -868,7 +874,7 @@ export default function OptionsPage() {
         const res = await fetch("/api/finviz-options", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ finvizKey: finvizKey.trim(), ticker: t }),
+          body: JSON.stringify({ ticker: t }),
         });
         const data = await res.json();
         const out = res.ok && !data.error && Array.isArray(data.rows)
@@ -893,7 +899,7 @@ export default function OptionsPage() {
           const res = await fetch("/api/finviz-quote", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ finvizKey: finvizKey.trim(), ticker: t }),
+            body: JSON.stringify({ ticker: t }),
           });
           const data = await res.json();
           const out = res.ok && !data.error && Array.isArray(data.rows)
@@ -974,10 +980,6 @@ export default function OptionsPage() {
 
   // ----- Claude interpretation: plain-language template, no jargon -----
   async function interpret(a, aId) {
-    if (!anthropicKey.trim()) {
-      setResultPanel({ title: "Ошибка", text: "Введи Anthropic API key наверху страницы.", loading: false });
-      return;
-    }
     setBusyInterpretId(aId);
     const title = `Интерпретация: $${a.ticker} ${a.row.Type} $${a.row.Strike} ${a.row.Expiry}`;
     setResultPanel({ title, text: "", loading: true });
@@ -998,7 +1000,6 @@ export default function OptionsPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          apiKey: anthropicKey.trim(),
           system: INTERPRET_SYSTEM,
           messages: [{ role: "user", content: userMsg }],
           useSearch: false,
@@ -1014,10 +1015,6 @@ export default function OptionsPage() {
 
   // ----- Claude strategy: plain-language template with real-money examples -----
   async function buildStrategy(t, contractsList = null, strategyHint = null) {
-    if (!anthropicKey.trim()) {
-      setResultPanel({ title: "Ошибка", text: "Введи Anthropic API key наверху страницы.", loading: false });
-      return;
-    }
     const list = contractsList ?? anomalies.filter((a) => a.ticker === t);
     const top5 = list.slice(0, 5);
     if (top5.length === 0) {
@@ -1054,7 +1051,6 @@ export default function OptionsPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          apiKey: anthropicKey.trim(),
           system: STRATEGY_SYSTEM,
           messages: [{ role: "user", content: userMsg }],
           useSearch: false,
@@ -1104,37 +1100,49 @@ export default function OptionsPage() {
     setStratFilters((f) => ({ ...f, tickers: on ? new Set(WATCHLIST) : new Set() }));
   }
 
+  // ----- Password gate: nothing else renders until the user is unlocked -----
+  if (!hasAccess) {
+    return (
+      <div style={S.page}>
+        <div style={S.lockBox}>
+          <h1 style={S.title}>Опционный деск</h1>
+          <p style={S.subtitle}>Введи пароль для доступа.</p>
+          <input
+            style={{ ...S.inp, marginTop: 12, width: "100%" }}
+            type="password"
+            value={passwordInput}
+            placeholder="пароль"
+            autoFocus
+            onChange={(e) => { setPasswordInput(e.target.value); setPasswordError(""); }}
+            onKeyDown={(e) => { if (e.key === "Enter") tryLogin(); }}
+          />
+          {passwordError && (
+            <div style={{ color: "#e57373", marginTop: 8, fontSize: 14 }}>
+              {passwordError}
+            </div>
+          )}
+          <button style={{ ...S.btn, marginTop: 12 }} onClick={tryLogin}>
+            Войти
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={S.page}>
+      <button
+        style={S.logoutBtn}
+        onClick={logout}
+        title="Сбросить доступ"
+      >
+        Выйти
+      </button>
       <h1 style={S.title}>Опционный деск</h1>
       <p style={S.subtitle}>
         Скоринг 0-100 · 🐂 / 🐻 / ⚡ сигналы · Claude-интерпретация простым языком ·
         конструктор стратегий с реальными деньгами.
       </p>
-
-      {/* ===== Credentials ===== */}
-      <div style={S.controls}>
-        <label style={S.lbl}>
-          Finviz Elite token
-          <input
-            style={S.inp}
-            type="password"
-            value={finvizKey}
-            placeholder="из настроек Hedge Intel"
-            onChange={(e) => saveFinvizKey(e.target.value)}
-          />
-        </label>
-        <label style={S.lbl}>
-          Anthropic API key
-          <input
-            style={S.inp}
-            type="password"
-            value={anthropicKey}
-            placeholder="sk-ant-..."
-            onChange={(e) => saveAnthropicKey(e.target.value)}
-          />
-        </label>
-      </div>
 
       {/* ===== Horizon filter (applies to both watchlist and single-ticker) ===== */}
       <div style={S.horizonRow}>
@@ -1575,7 +1583,7 @@ export default function OptionsPage() {
 }
 
 const S = {
-  page:       { background: "#0d0e10", color: "#e6e6e6", minHeight: "100vh", padding: "24px 32px 64px", fontFamily: "system-ui, sans-serif" },
+  page:       { background: "#0d0e10", color: "#e6e6e6", minHeight: "100vh", padding: "24px 32px 64px", fontFamily: "system-ui, sans-serif", position: "relative" },
   title:      { margin: "0 0 4px", fontSize: 24, color: "#fff" },
   subtitle:   { margin: "0 0 20px", color: "#888", fontSize: 13 },
   h2:         { margin: "24px 0 8px", fontSize: 16, color: "#fff", borderBottom: "1px solid #2a2d33", paddingBottom: 6 },
@@ -1666,4 +1674,8 @@ const S = {
   resultHead: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 },
   resultText: { margin: 0, color: "#e6e6e6", fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap", fontFamily: "system-ui, sans-serif" },
   resultLoading: { color: "#888", fontSize: 13, padding: "8px 0" },
+
+  // Password gate
+  lockBox:    { maxWidth: 360, margin: "10vh auto 0", padding: "24px 28px", background: "#161820", border: "1px solid #2a2d33", borderRadius: 8 },
+  logoutBtn:  { position: "absolute", top: 18, right: 24, padding: "6px 12px", background: "#1a1c20", color: "#aaa", border: "1px solid #2a2d33", borderRadius: 4, cursor: "pointer", fontSize: 12 },
 };

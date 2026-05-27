@@ -1,10 +1,14 @@
 export async function POST(request) {
   try {
     const body = await request.json();
-    const { apiKey, messages, useSearch, system } = body;
+    const { messages, useSearch, system } = body;
 
+    const apiKey = (process.env.ANTHROPIC_API_KEY || "").trim();
     if (!apiKey) {
-      return Response.json({ error: "API key missing" }, { status: 400 });
+      return Response.json(
+        { error: "ANTHROPIC_API_KEY не задан на сервере" },
+        { status: 500 }
+      );
     }
 
     const tools = useSearch

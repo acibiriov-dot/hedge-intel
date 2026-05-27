@@ -4,16 +4,19 @@
 
 export async function POST(request) {
   try {
-    const { finvizKey, ticker, expiry } = await request.json();
-    if (!finvizKey || !ticker) {
+    const { ticker, expiry } = await request.json();
+    const token = (process.env.FINVIZ_KEY || "").trim();
+    if (!token) {
       return Response.json(
-        { error: "Нужен Finviz Elite API Token и тикер" },
-        { status: 400 }
+        { error: "FINVIZ_KEY не задан на сервере" },
+        { status: 500 }
       );
+    }
+    if (!ticker) {
+      return Response.json({ error: "Нужен тикер" }, { status: 400 });
     }
 
     const t = String(ticker).trim().toUpperCase();
-    const token = String(finvizKey).trim();
     const e = expiry ? String(expiry).trim() : "";
 
     let url = `https://elite.finviz.com/export/options?t=${encodeURIComponent(t)}&ty=oc&auth=${encodeURIComponent(token)}`;
