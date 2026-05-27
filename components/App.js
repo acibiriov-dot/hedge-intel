@@ -1211,6 +1211,8 @@ ${brief}`;
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <a href="/smart-strategy" style={{ background: "transparent", border: "1px solid #d97706", color: "#ffd700", padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 700, textDecoration: "none", letterSpacing: 0.3 }}>⚡ Smart Strategy</a>
+          <a href="/options" style={{ background: "transparent", border: "1px solid #444466", color: "#aaaacc", padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, textDecoration: "none" }}>🎯 Опционный деск</a>
           <div style={{ fontSize: 11, color: "#6666aa" }}>{getNow()}</div>
           {isTestMode && <span style={{ background: "#ffc107", color: "#1a1a2e", fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 4 }}>⚠ ТЕСТ</span>}
           <button onClick={() => setShowSettings(!showSettings)} style={{ background: showSettings ? "#ffd700" : "transparent", border: "1px solid " + (showSettings ? "#ffd700" : "#444466"), color: showSettings ? "#1a1a2e" : "#aaaacc", padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 600 }}>⚙ Настройки</button>

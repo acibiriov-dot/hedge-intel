@@ -1131,13 +1131,10 @@ export default function OptionsPage() {
 
   return (
     <div style={S.page}>
-      <button
-        style={S.logoutBtn}
-        onClick={logout}
-        title="Сбросить доступ"
-      >
-        Выйти
-      </button>
+      <div style={{ position: "absolute", top: 18, right: 24, display: "flex", gap: 8 }}>
+        <a href="/smart-strategy" style={{ padding: "6px 12px", background: "#1a1c20", color: "#d97706", border: "1px solid #d97706", borderRadius: 4, fontSize: 12, fontWeight: 600, textDecoration: "none" }}>⚡ Smart Strategy</a>
+        <button style={{ ...S.logoutBtn, position: "static" }} onClick={logout} title="Сбросить доступ">Выйти</button>
+      </div>
       <h1 style={S.title}>Опционный деск</h1>
       <p style={S.subtitle}>
         Скоринг 0-100 · 🐂 / 🐻 / ⚡ сигналы · Claude-интерпретация простым языком ·
