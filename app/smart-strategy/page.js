@@ -139,56 +139,82 @@ function withinDTE(row, today, min = DTE_MIN, max = DTE_MAX) {
   return dte >= min && dte <= max;
 }
 
-/** Short call: Delta 0.20-0.30, OI > 100, max Bid. */
+// Pickers use a strict pass first (delta-targeted, decent OI), then fall back
+// to the closest available contract by delta. Real chains often lack the
+// textbook 0.20-0.30 short-premium contract, so a soft fallback keeps the
+// strategy engine usable on thin tickers.
+
+/** Short call: Delta 0.15-0.40, OI > 0, max Bid → fallback closest to Δ 0.25. */
 function pickShortCall(rows, today) {
-  const cands = rows.filter((r) => {
-    if (!isCall(r) || !withinDTE(r, today)) return false;
-    const d = num(r.Delta), oi = num(r["Open Int."]), bid = num(r.Bid);
-    return d >= 0.20 && d <= 0.30 && oi > 100 && bid > 0;
+  const inWindow = rows.filter((r) => isCall(r) && withinDTE(r, today) && num(r.Bid) > 0);
+  const strict = inWindow.filter((r) => {
+    const d = num(r.Delta), oi = num(r["Open Int."]);
+    return d >= 0.15 && d <= 0.40 && oi > 0;
   });
-  cands.sort((a, b) => num(b.Bid) - num(a.Bid));
-  return cands[0] || null;
+  if (strict.length) {
+    strict.sort((a, b) => num(b.Bid) - num(a.Bid));
+    return strict[0];
+  }
+  // Fallback: any tradeable call, prefer Δ closest to 0.25.
+  const soft = [...inWindow];
+  soft.sort((a, b) => Math.abs(num(a.Delta) - 0.25) - Math.abs(num(b.Delta) - 0.25));
+  return soft[0] || null;
 }
 
-/** Short put: Delta -0.30 to -0.20, OI > 100, max Bid. */
+/** Short put: Delta -0.40 to -0.15, OI > 0, max Bid → fallback closest to Δ -0.25. */
 function pickShortPut(rows, today) {
-  const cands = rows.filter((r) => {
-    if (!isPut(r) || !withinDTE(r, today)) return false;
-    const d = num(r.Delta), oi = num(r["Open Int."]), bid = num(r.Bid);
-    return d <= -0.20 && d >= -0.30 && oi > 100 && bid > 0;
+  const inWindow = rows.filter((r) => isPut(r) && withinDTE(r, today) && num(r.Bid) > 0);
+  const strict = inWindow.filter((r) => {
+    const d = num(r.Delta), oi = num(r["Open Int."]);
+    return d <= -0.15 && d >= -0.40 && oi > 0;
   });
-  cands.sort((a, b) => num(b.Bid) - num(a.Bid));
-  return cands[0] || null;
+  if (strict.length) {
+    strict.sort((a, b) => num(b.Bid) - num(a.Bid));
+    return strict[0];
+  }
+  const soft = [...inWindow];
+  soft.sort((a, b) => Math.abs(num(a.Delta) + 0.25) - Math.abs(num(b.Delta) + 0.25));
+  return soft[0] || null;
 }
 
-/** ATM call: Delta 0.45-0.55, OI > 50, prefer nearest DTE. */
+/** ATM call: Delta 0.35-0.65, OI > 0, nearest DTE → fallback closest to Δ 0.50. */
 function pickATMCall(rows, today) {
-  const cands = rows.filter((r) => {
-    if (!isCall(r) || !withinDTE(r, today)) return false;
+  const inWindow = rows.filter((r) => isCall(r) && withinDTE(r, today) && num(r.Bid) > 0);
+  const strict = inWindow.filter((r) => {
     const d = num(r.Delta), oi = num(r["Open Int."]);
-    return d >= 0.45 && d <= 0.55 && oi > 50;
+    return d >= 0.35 && d <= 0.65 && oi > 0;
   });
-  cands.sort((a, b) => {
-    const da = daysBetween(parseFinvizExpiry(a.Expiry), today);
-    const db = daysBetween(parseFinvizExpiry(b.Expiry), today);
-    return da - db;
-  });
-  return cands[0] || null;
+  if (strict.length) {
+    strict.sort((a, b) => {
+      const da = daysBetween(parseFinvizExpiry(a.Expiry), today);
+      const db = daysBetween(parseFinvizExpiry(b.Expiry), today);
+      return da - db;
+    });
+    return strict[0];
+  }
+  const soft = [...inWindow];
+  soft.sort((a, b) => Math.abs(num(a.Delta) - 0.50) - Math.abs(num(b.Delta) - 0.50));
+  return soft[0] || null;
 }
 
-/** ATM put: Delta -0.55 to -0.45, OI > 50, prefer nearest DTE. */
+/** ATM put: Delta -0.65 to -0.35, OI > 0, nearest DTE → fallback closest to Δ -0.50. */
 function pickATMPut(rows, today) {
-  const cands = rows.filter((r) => {
-    if (!isPut(r) || !withinDTE(r, today)) return false;
+  const inWindow = rows.filter((r) => isPut(r) && withinDTE(r, today) && num(r.Bid) > 0);
+  const strict = inWindow.filter((r) => {
     const d = num(r.Delta), oi = num(r["Open Int."]);
-    return d <= -0.45 && d >= -0.55 && oi > 50;
+    return d <= -0.35 && d >= -0.65 && oi > 0;
   });
-  cands.sort((a, b) => {
-    const da = daysBetween(parseFinvizExpiry(a.Expiry), today);
-    const db = daysBetween(parseFinvizExpiry(b.Expiry), today);
-    return da - db;
-  });
-  return cands[0] || null;
+  if (strict.length) {
+    strict.sort((a, b) => {
+      const da = daysBetween(parseFinvizExpiry(a.Expiry), today);
+      const db = daysBetween(parseFinvizExpiry(b.Expiry), today);
+      return da - db;
+    });
+    return strict[0];
+  }
+  const soft = [...inWindow];
+  soft.sort((a, b) => Math.abs(num(a.Delta) + 0.50) - Math.abs(num(b.Delta) + 0.50));
+  return soft[0] || null;
 }
 
 /** OTM put for a bear-put spread: same expiry as anchor, lower strike, decent Bid. */
@@ -210,16 +236,31 @@ function pickOTMPut(rows, anchor) {
 function pickStranglePair(rows, today) {
   const sc = pickShortCall(rows, today);
   if (!sc) return null;
-  // Find a short put with same expiry.
-  const sp = rows
-    .filter((r) => isPut(r) && r.Expiry === sc.Expiry)
-    .filter((r) => {
-      const d = num(r.Delta), oi = num(r["Open Int."]), bid = num(r.Bid);
-      return d <= -0.20 && d >= -0.30 && oi > 100 && bid > 0;
-    })
-    .sort((a, b) => num(b.Bid) - num(a.Bid))[0];
+  // Find a short put with same expiry — same widened filter as pickShortPut.
+  const sameExp = rows.filter((r) => isPut(r) && r.Expiry === sc.Expiry && num(r.Bid) > 0);
+  const strict = sameExp.filter((r) => {
+    const d = num(r.Delta), oi = num(r["Open Int."]);
+    return d <= -0.15 && d >= -0.40 && oi > 0;
+  });
+  let sp;
+  if (strict.length) {
+    strict.sort((a, b) => num(b.Bid) - num(a.Bid));
+    sp = strict[0];
+  } else if (sameExp.length) {
+    const soft = [...sameExp];
+    soft.sort((a, b) => Math.abs(num(a.Delta) + 0.25) - Math.abs(num(b.Delta) + 0.25));
+    sp = soft[0];
+  }
   if (!sp) return null;
   return { call: sc, put: sp };
+}
+
+/** Last-resort fallback: contract with max Bid across the whole chain. */
+function pickBestAvailable(rows) {
+  const tradeable = rows.filter((r) => num(r.Bid) > 0);
+  if (!tradeable.length) return null;
+  tradeable.sort((a, b) => num(b.Bid) - num(a.Bid));
+  return tradeable[0];
 }
 
 // ---------- strategy selection ----------
@@ -325,6 +366,21 @@ function chooseStrategy(metrics, picks) {
       fallback: true,
     };
   }
+
+  // Last resort: max-Bid contract from the whole chain → Long Call or Long Put.
+  if (picks.bestAvailable) {
+    const c = picks.bestAvailable;
+    const isC = isCall(c);
+    return {
+      id: isC ? "long_call" : "long_put",
+      name: isC ? "Long Call (BEST AVAILABLE)" : "Long Put (BEST AVAILABLE)",
+      icon: isC ? "🚀" : "📉",
+      winrate: Math.abs(num(c.Delta)) * 100,
+      contracts: isC ? { call: c } : { put: c },
+      fallback: true,
+      bestAvailable: true,
+    };
+  }
   return null;
 }
 
@@ -333,12 +389,12 @@ function whyNotOthers(selected, metrics, picks) {
   const b = bias(metrics.pcr);
   const v = ivLevel(metrics.avgIV);
   const all = [
-    { id: "covered_call",    name: "Covered Call",     need: () => !picks.shortCall ? "нет колла с подходящей Delta 0.20-0.30" : (b !== "bullish" ? `рынок ${b === "bearish" ? "медвежий" : "нейтральный"} — не время продавать коллы` : (v !== "moderate" ? `IV ${v === "high" ? "слишком высокая" : "слишком низкая"} для CC` : null)) },
-    { id: "csp",             name: "Cash-Secured Put", need: () => !picks.shortPut ? "нет пута с подходящей Delta -0.20…-0.30" : (b !== "bullish" ? `рынок ${b}, нет смысла встречать падение` : (v !== "high" ? `IV ${v}, премия за пут не максимальна` : null)) },
+    { id: "covered_call",    name: "Covered Call",     need: () => !picks.shortCall ? "нет колла с подходящей Delta 0.15-0.40" : (b !== "bullish" ? `рынок ${b === "bearish" ? "медвежий" : "нейтральный"} — не время продавать коллы` : (v !== "moderate" ? `IV ${v === "high" ? "слишком высокая" : "слишком низкая"} для CC` : null)) },
+    { id: "csp",             name: "Cash-Secured Put", need: () => !picks.shortPut ? "нет пута с подходящей Delta -0.40…-0.15" : (b !== "bullish" ? `рынок ${b}, нет смысла встречать падение` : (v !== "high" ? `IV ${v}, премия за пут не максимальна` : null)) },
     { id: "short_strangle",  name: "Short Strangle",   need: () => !picks.strangle ? "нет пары колл+пут на одной экспирации с нужной Delta" : (b !== "neutral" ? `рынок направленный (${b}) — стрэнгл рискован` : (v !== "high" ? `IV ${v}, премии за оба крыла малы` : null)) },
     { id: "bear_put_spread", name: "Bear Put Spread",  need: () => (!picks.atmPut || !picks.otmPut) ? "нет пары ATM+OTM путов" : (b !== "bearish" ? `рынок ${b}, ставка на падение не оправдана` : (v !== "moderate" ? `IV ${v}, цена спреда не оптимальна` : null)) },
-    { id: "long_call",       name: "Long Call",        need: () => !picks.atmCall ? "нет ATM колла с Delta 0.45-0.55" : (v !== "low" ? `IV ${v}, опцион дороже разумного` : (b === "bearish" ? "рынок медвежий, длинный колл против тренда" : null)) },
-    { id: "long_put",        name: "Long Put",         need: () => !picks.atmPut ? "нет ATM пута с Delta -0.45…-0.55" : (v !== "low" ? `IV ${v}, опцион дороже разумного` : (b !== "bearish" ? `рынок ${b}, длинный пут против тренда` : null)) },
+    { id: "long_call",       name: "Long Call",        need: () => !picks.atmCall ? "нет ATM колла с Delta 0.35-0.65" : (v !== "low" ? `IV ${v}, опцион дороже разумного` : (b === "bearish" ? "рынок медвежий, длинный колл против тренда" : null)) },
+    { id: "long_put",        name: "Long Put",         need: () => !picks.atmPut ? "нет ATM пута с Delta -0.65…-0.35" : (v !== "low" ? `IV ${v}, опцион дороже разумного` : (b !== "bearish" ? `рынок ${b}, длинный пут против тренда` : null)) },
   ];
   return all.filter((s) => s.id !== selected.id).map((s) => ({ name: s.name, reason: s.need() || "подходит, но выбранная стратегия даёт больший edge" }));
 }
@@ -615,12 +671,17 @@ export default function SmartStrategy() {
       if (!Number.isFinite(currentPrice)) throw new Error("Не удалось прочитать текущую цену.");
 
       const today = new Date();
+      const callCount = rows.filter(isCall).length;
+      const putCount  = rows.filter(isPut).length;
       const metrics = {
         pcr:        computePCR(rows),
         avgIV:      meanIV(rows),
         skew:       computeSkew(rows),
         maxPain:    maxPainStrike(rows),
         atm:        atmStrike(rows, currentPrice),
+        chainCount: rows.length,
+        callCount,
+        putCount,
         bias:       null,
         ivLevel:    null,
       };
@@ -629,12 +690,13 @@ export default function SmartStrategy() {
 
       const atmPut = pickATMPut(rows, today);
       const picks = {
-        shortCall: pickShortCall(rows, today),
-        shortPut:  pickShortPut(rows, today),
-        atmCall:   pickATMCall(rows, today),
+        shortCall:     pickShortCall(rows, today),
+        shortPut:      pickShortPut(rows, today),
+        atmCall:       pickATMCall(rows, today),
         atmPut,
-        otmPut:    pickOTMPut(rows, atmPut),
-        strangle:  pickStranglePair(rows, today),
+        otmPut:        pickOTMPut(rows, atmPut),
+        strangle:      pickStranglePair(rows, today),
+        bestAvailable: pickBestAvailable(rows),
       };
 
       const strategy = chooseStrategy(metrics, picks);
@@ -846,11 +908,51 @@ function describeContracts(c) {
   return parts.join(" + ");
 }
 
+function MarketInfo({ ticker, currentPrice, metrics }) {
+  const biasLabel = metrics.bias === "bullish" ? "🐂 бычий" : metrics.bias === "bearish" ? "🐻 медвежий" : "⚖️ нейтральный";
+  const ivLabel   = metrics.ivLevel === "high" ? "высокая" : metrics.ivLevel === "low" ? "низкая" : "умеренная";
+  return (
+    <div style={S.marketWrap}>
+      <div style={S.marketTitle}>ОБСТАНОВКА НА РЫНКЕ — ${ticker}</div>
+      <div style={S.marketGrid}>
+        <div style={S.marketCell}>
+          <div style={S.marketKey}>Текущая цена</div>
+          <div style={S.marketVal}>${currentPrice.toFixed(2)}</div>
+        </div>
+        <div style={S.marketCell}>
+          <div style={S.marketKey}><Term k="pcr">PCR</Term></div>
+          <div style={S.marketVal}>{metrics.pcr != null ? metrics.pcr.toFixed(2) : "—"}</div>
+          <div style={S.marketSub}>{biasLabel}</div>
+        </div>
+        <div style={S.marketCell}>
+          <div style={S.marketKey}>Средняя <Term k="iv">IV</Term></div>
+          <div style={S.marketVal}>{metrics.avgIV != null ? metrics.avgIV.toFixed(1) + "%" : "—"}</div>
+          <div style={S.marketSub}>{ivLabel}</div>
+        </div>
+        <div style={S.marketCell}>
+          <div style={S.marketKey}>Контрактов в цепочке</div>
+          <div style={S.marketVal}>{metrics.chainCount ?? "—"}</div>
+          <div style={S.marketSub}>{metrics.callCount} коллов · {metrics.putCount} путов</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ResultCard({ result, askClaude, askLoading, askText }) {
   const { ticker, currentPrice, metrics, strategy, calc, theta, reasoning, others, contracts } = result;
 
   return (
-    <div style={S.resultWrap}>
+    <>
+      <MarketInfo ticker={ticker} currentPrice={currentPrice} metrics={metrics} />
+
+      <div style={S.resultWrap}>
+      {strategy.bestAvailable && (
+        <div style={S.bestAvailBanner}>
+          ⚠ <b>BEST AVAILABLE fallback</b> — ни одна из 5 базовых стратегий не подошла под фильтры.
+          Показываю позицию по самому ликвидному контракту цепочки.
+        </div>
+      )}
       {/* Header */}
       <div style={S.resultHeader}>
         <div style={S.resultIcon}>{strategy.icon}</div>
@@ -958,7 +1060,8 @@ function ResultCard({ result, askClaude, askLoading, askText }) {
           </div>
         )}
       </div>
-    </div>
+      </div>
+    </>
   );
 }
 
@@ -1012,6 +1115,17 @@ const S = {
   winrateBox: { marginLeft: "auto", textAlign: "center", padding: "10px 16px", background: "#0d0e10", border: "1px solid #2a2d33", borderRadius: 8 },
   winrateNum: { fontSize: 28, fontWeight: 800, color: "#4caf50", fontVariantNumeric: "tabular-nums" },
   winrateLabel: { fontSize: 11, color: "#888", marginTop: 2 },
+
+  // Market info — always visible above the strategy card
+  marketWrap:  { marginTop: 20, marginBottom: 12, background: "#161820", border: "1px solid #2a2d33", borderRadius: 10, padding: "16px 20px" },
+  marketTitle: { color: "#888", fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 12 },
+  marketGrid:  { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12 },
+  marketCell:  { background: "#0d0e10", border: "1px solid #2a2d33", borderRadius: 6, padding: "10px 14px" },
+  marketKey:   { color: "#888", fontSize: 11, marginBottom: 4 },
+  marketVal:   { color: "#fff", fontSize: 18, fontWeight: 700, fontVariantNumeric: "tabular-nums" },
+  marketSub:   { color: "#aaa", fontSize: 11, marginTop: 2 },
+
+  bestAvailBanner: { background: "#2e1a1a", color: "#ffb380", border: "1px solid #d97706", borderRadius: 6, padding: "10px 14px", marginBottom: 14, fontSize: 12, lineHeight: 1.5 },
 
   section: { marginBottom: 22 },
   sectionTitle: { color: "#d97706", fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 10 },
