@@ -325,6 +325,7 @@ export default function CoveredCall() {
     <div style={S.page}>
       <div style={S.topBar}>
         <a href="/dashboard"      style={S.navLink}>Dashboard</a>
+        <a href="/strategies"     style={S.navLink}>Strategies</a>
         <a href="/smart-strategy" style={S.navLink}>Smart Strategy</a>
         <a href="/options"        style={S.navLink}>Options Desk</a>
         <button style={S.navLink} onClick={logout}>Logout</button>
