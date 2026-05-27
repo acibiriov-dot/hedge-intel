@@ -634,8 +634,17 @@ function SelectedView({ data, selected, chainIV, aiText, aiLoading, onAI }) {
       <SectionTitle num="04" name="IV Intelligence" />
       <IvPanel selected={selected} chainIV={chainIV} verdict={iv} />
 
+      {/* ===== Expected Move ===== */}
+      <SectionTitle num="05" name="Expected Move" hint="1σ at expiry" />
+      <ExpectedMovePanel
+        currentPrice={data.currentPrice}
+        strike={selected.strike}
+        dte={selected.dte}
+        ivPct={chainIV}
+      />
+
       {/* ===== AI Analysis ===== */}
-      <SectionTitle num="05" name="AI Analysis" />
+      <SectionTitle num="06" name="AI Analysis" />
       <div style={S.aiBox}>
         <button style={S.btnEmerald} onClick={onAI} disabled={aiLoading}>
           {aiLoading ? "RUNNING…" : "RUN AI ANALYSIS"}
@@ -680,6 +689,64 @@ function IvPanel({ selected, chainIV, verdict }) {
       </div>
       <div style={{ ...S.ivVerdict, borderColor: dotColor, color: dotColor }}>
         <span style={{ marginRight: 8 }}>●</span>{verdict.text}
+      </div>
+    </div>
+  );
+}
+
+function ExpectedMovePanel({ currentPrice, strike, dte, ivPct }) {
+  // EM = spot × (IV / 100) × √(DTE / 365)
+  // Using chain-mean IV as the "market expectation" anchor rather than the
+  // selected strike's IV — that's the convention for expected move displays.
+  if (!Number.isFinite(currentPrice) || !Number.isFinite(ivPct) || !Number.isFinite(dte) || dte <= 0) {
+    return (
+      <div style={S.ivPanel}>
+        <div style={S.metricSub}>Недостаточно данных для расчёта Expected Move.</div>
+      </div>
+    );
+  }
+  const em        = currentPrice * (ivPct / 100) * Math.sqrt(dte / 365);
+  const upper     = currentPrice + em;
+  const lower     = currentPrice - em;
+  const emPct     = (em / currentPrice) * 100;
+  // For a Covered Call we sell an OTM call (strike > spot). The risk is the
+  // stock blowing through the strike before expiry. If strike < upper → strike
+  // lies inside the 1σ expected-move band → high probability of breach.
+  const strikeInside = strike <= upper;
+  const verdictColor = strikeInside ? "#ef4444" : "#10b981";
+  const verdictText  = strikeInside
+    ? "Высокий риск пробоя страйка — он внутри 1σ expected move."
+    : "Страйк вне зоны ожидаемого движения — заметный запас прочности.";
+  const verdictIcon  = strikeInside ? "⚠" : "✓";
+
+  return (
+    <div style={S.ivPanel}>
+      <div style={S.emGrid}>
+        <div style={S.ivCell}>
+          <div style={S.ivKey}>SPOT</div>
+          <div style={S.ivVal}>{"$" + currentPrice.toFixed(2)}</div>
+        </div>
+        <div style={S.ivCell}>
+          <div style={S.ivKey}>EXPECTED MOVE · {dte}d</div>
+          <div style={S.ivVal}>{"±$" + em.toFixed(2)}</div>
+          <div style={S.metricSub}>{"±" + emPct.toFixed(2) + "%"}</div>
+        </div>
+        <div style={S.ivCell}>
+          <div style={S.ivKey}>UPPER 1σ</div>
+          <div style={S.ivVal}>{"$" + upper.toFixed(2)}</div>
+        </div>
+        <div style={S.ivCell}>
+          <div style={S.ivKey}>LOWER 1σ</div>
+          <div style={S.ivVal}>{"$" + lower.toFixed(2)}</div>
+        </div>
+      </div>
+      <div style={S.emStrikeLine}>
+        Selected strike <b style={{ color: "#10b981" }}>${strike.toFixed(2)}</b>{" — "}
+        <b style={{ color: verdictColor }}>{strikeInside ? "ВНУТРИ" : "ВНЕ"}</b>{" "}
+        expected move band.
+      </div>
+      <div style={{ ...S.ivVerdict, borderColor: verdictColor, color: verdictColor }}>
+        <span style={{ marginRight: 8 }}>{verdictIcon}</span>{verdictText}
       </div>
     </div>
   );
@@ -793,6 +860,8 @@ const S = {
   // IV panel
   ivPanel:    { background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: 2, padding: "16px 18px" },
   ivGrid:     { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 0, marginBottom: 14 },
+  emGrid:     { display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 0, marginBottom: 14 },
+  emStrikeLine: { padding: "10px 0 14px", color: "#e6e6e6", fontSize: 13, fontFamily: "ui-monospace, monospace", letterSpacing: 0.3 },
   ivCell:     { borderRight: `1px solid ${C.border}`, paddingRight: 18 },
   ivKey:      { color: C.textMute, fontSize: 9, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", marginBottom: 4, fontFamily: FONT_MONO },
   ivVal:      { color: C.text, fontSize: 18, fontWeight: 700, fontFamily: FONT_MONO },
