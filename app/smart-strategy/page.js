@@ -834,7 +834,11 @@ export default function SmartStrategy() {
 
   return (
     <div style={S.page}>
-      <button style={S.logoutBtn} onClick={logout} title="Сбросить доступ">Выйти</button>
+      <div style={{ position: "absolute", top: 18, right: 24, display: "flex", gap: 8 }}>
+        <a href="/dashboard" style={{ padding: "6px 12px", background: "#1a1c20", color: "#4caf50", border: "1px solid #4caf50", borderRadius: 4, fontSize: 12, fontWeight: 600, textDecoration: "none" }}>🎛 Dashboard</a>
+        <a href="/options" style={{ padding: "6px 12px", background: "#1a1c20", color: "#aaa", border: "1px solid #2a2d33", borderRadius: 4, fontSize: 12, fontWeight: 600, textDecoration: "none" }}>🎯 Опционный деск</a>
+        <button style={{ ...S.logoutBtn, position: "static" }} onClick={logout} title="Сбросить доступ">Выйти</button>
+      </div>
 
       <h1 style={S.title}>Smart Strategy</h1>
       <p style={S.subtitle}>
