@@ -109,6 +109,41 @@ function inPublishWindow(parts) {
 /** Two-digit clock string for display. */
 function pad2(n) { return String(n).padStart(2, "0"); }
 
+/** Render a TG-stats value with consistent loading/error/missing fallbacks. */
+function tgValue(stats, error, loading, getter) {
+  if (loading) return <span style={{ color: "#666" }}>загрузка…</span>;
+  if (error)   return <span style={{ color: "#e57373", fontSize: 11 }} title={error}>ошибка</span>;
+  if (!stats)  return <span style={{ color: "#666" }}>—</span>;
+  try {
+    const v = getter(stats);
+    if (v == null || v === "") return <span style={{ color: "#666" }}>—</span>;
+    return v;
+  } catch {
+    return <span style={{ color: "#666" }}>—</span>;
+  }
+}
+
+/** "5 мин назад", "2 ч назад", "вчера", etc. Pure UI — accepts ms delta. */
+function relativeTimeRu(deltaMs) {
+  if (!Number.isFinite(deltaMs) || deltaMs < 0) return "только что";
+  const m = Math.floor(deltaMs / 60_000);
+  if (m < 1)    return "только что";
+  if (m < 60)   return `${m} мин назад`;
+  const h = Math.floor(m / 60);
+  if (h < 24)   return `${h} ч назад`;
+  const d = Math.floor(h / 24);
+  if (d === 1)  return "вчера";
+  if (d < 7)    return `${d} дн назад`;
+  const w = Math.floor(d / 7);
+  return `${w} нед назад`;
+}
+
+/** Truncate for the small subtitle line under a stat card value. */
+function truncateForSub(s, n) {
+  if (!s) return "";
+  return s.length > n ? s.slice(0, n).trimEnd() + "…" : s;
+}
+
 // ===========================================================================
 
 export default function Dashboard() {
@@ -129,6 +164,37 @@ export default function Dashboard() {
   // Quick-action modal state (for premarket/summary CLI commands).
   const [modal, setModal] = useState(null); // { label, cmd, note }
   const [copied, setCopied] = useState(false);
+
+  // Live Telegram channel stats — refreshed every 5 min via /api/telegram-stats.
+  // Requires TG_BOT_TOKEN + TG_CHANNEL_ID env vars on Vercel (see route.js).
+  // Bot must be admin in the channel for accurate subscriber count.
+  const [tgStats, setTgStats] = useState(null);
+  const [tgError, setTgError] = useState(null);
+  const [tgLoading, setTgLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function refresh() {
+      try {
+        const r = await fetch("/api/telegram-stats", { cache: "no-store" });
+        const data = await r.json();
+        if (cancelled) return;
+        if (data.ok) {
+          setTgStats(data);
+          setTgError(null);
+        } else {
+          setTgError(data.error || "TG stats fetch failed");
+        }
+      } catch (e) {
+        if (!cancelled) setTgError(e.message || "network error");
+      } finally {
+        if (!cancelled) setTgLoading(false);
+      }
+    }
+    refresh();
+    const id = setInterval(refresh, 5 * 60_000); // every 5 minutes
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
 
   function tryLogin() {
     if (passwordInput === PASSWORD) {
@@ -222,8 +288,10 @@ export default function Dashboard() {
           rows={[
             { k: "Окно публикации", v: windowOpen ? "🟢 открыто" : "🔴 закрыто" },
             { k: "Интервал фетча",  v: `${FETCH_INTERVAL_MIN} мин` },
-            { k: "Постов сегодня",  v: <Muted>— TG API не подключен</Muted> },
-            { k: "Последний пост",  v: <Muted>— TG API не подключен</Muted> },
+            { k: "Постов сегодня",  v: tgValue(tgStats, tgError, tgLoading, (s) => s.postsToday) },
+            { k: "Последний пост",  v: tgValue(tgStats, tgError, tgLoading, (s) =>
+                s.lastPost ? relativeTimeRu(now.getTime() - s.lastPost.timestamp) : "нет постов"
+              ) },
           ]}
         />
         <AgentCard
@@ -253,9 +321,30 @@ export default function Dashboard() {
       {/* ===== СЕКЦИЯ 2 — СТАТИСТИКА КАНАЛА ===== */}
       <h2 style={S.h2}>2 · Канал @{TELEGRAM_CHANNEL}</h2>
       <div style={S.grid4}>
-        <StatCard k="Постов сегодня"        v={<Muted>—</Muted>} sub="требует TG Bot API" />
-        <StatCard k="Постов за неделю"      v={<Muted>—</Muted>} sub="требует TG Bot API" />
-        <StatCard k="Последний пост"        v={<Muted>—</Muted>} sub="заголовок + время" />
+        <StatCard
+          k="Подписчиков"
+          v={tgValue(tgStats, tgError, tgLoading, (s) => s.subscribers != null ? s.subscribers.toLocaleString("ru-RU") : "—")}
+          sub={tgStats?.source?.subscribers === "bot_api" ? "Bot API · live" : tgStats?.source?.subscribers === "scrape" ? "t.me/s scrape" : "обновляется каждые 5 мин"}
+        />
+        <StatCard
+          k="Постов сегодня"
+          v={tgValue(tgStats, tgError, tgLoading, (s) => s.postsToday)}
+          sub="с 00:00 Amsterdam"
+        />
+        <StatCard
+          k="Постов за неделю"
+          v={tgValue(tgStats, tgError, tgLoading, (s) => s.postsThisWeek)}
+          sub="последние 7 дней"
+        />
+        <StatCard
+          k="Последний пост"
+          v={tgValue(tgStats, tgError, tgLoading, (s) =>
+            s.lastPost ? relativeTimeRu(now.getTime() - s.lastPost.timestamp) : "нет постов"
+          )}
+          sub={tgStats?.lastPost?.text ? truncateForSub(tgStats.lastPost.text, 60) : "—"}
+        />
+      </div>
+      <div style={S.grid4}>
         <StatCard
           k="Publish window"
           v={windowOpen ? "🟢 открыто" : "🔴 закрыто"}
