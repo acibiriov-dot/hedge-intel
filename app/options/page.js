@@ -401,6 +401,8 @@ function findVolArbOpportunities(chainsByTicker) {
         construction: "Продай ближнюю экспирацию (дорогая IV), купи дальнюю (дешёвая IV) — заработок на схлопывании near-term volatility.",
         contracts: [nearTop, farTop].filter(Boolean),
         expiry: `${near.expiry} → ${far.expiry}`,
+        expiryNear: near.expiry,
+        expiryFar: far.expiry,
       });
       break; // one calendar pair per ticker; closest qualifying pair wins
     }
@@ -529,9 +531,46 @@ function findGammaScalpOpportunities(chainsByTicker) {
   return out;
 }
 
-/** Aggregator — runs all 6 analyzers, returns flat list of opportunities. */
+/**
+ * Per-strategy historical winrate. Numbers are heuristic baselines —
+ * IV-SPIKE depends on actual Delta of the chosen contracts; the rest are
+ * fixed for now (replace with real historical-stats later if needed).
+ */
+function computeWinrate(opp) {
+  switch (opp.strategy) {
+    case "iv_spike": {
+      const deltas = (opp.contracts || [])
+        .map((c) => Math.abs(num(c["Delta"])))
+        .filter((v) => Number.isFinite(v));
+      if (!deltas.length) return 50;
+      const meanDelta = deltas.reduce((a, b) => a + b, 0) / deltas.length;
+      return Math.max(0, Math.min(100, Math.round(100 - meanDelta * 100)));
+    }
+    case "skew":     return 65;
+    case "vol_arb":  return 70;
+    case "max_pain": {
+      const totalOI = (opp.contracts || []).reduce(
+        (s, c) => s + (Number.isFinite(num(c["Open Int."])) ? num(c["Open Int."]) : 0), 0
+      );
+      return totalOI > 1000 ? 75 : 60;
+    }
+    case "earnings": return 68;
+    case "gamma":    return 55;
+    default:         return 50;
+  }
+}
+
+/** Convert YYYY-MM-DD (dropdown value) → M/D/YYYY (Finviz CSV format). */
+function isoToFinviz(iso) {
+  if (!iso) return "";
+  const [y, m, d] = String(iso).split("-");
+  if (!y || !m || !d) return "";
+  return `${parseInt(m, 10)}/${parseInt(d, 10)}/${y}`;
+}
+
+/** Aggregator — runs all 6 analyzers, attaches per-strategy winrate. */
 function findAllStrategies(chainsByTicker, quotesByTicker) {
-  return [
+  const all = [
     ...findIvSpikeOpportunities(chainsByTicker),
     ...findSkewOpportunities(chainsByTicker),
     ...findVolArbOpportunities(chainsByTicker),
@@ -539,6 +578,110 @@ function findAllStrategies(chainsByTicker, quotesByTicker) {
     ...findEarningsPlayOpportunities(chainsByTicker, quotesByTicker),
     ...findGammaScalpOpportunities(chainsByTicker),
   ];
+  return all.map((opp) => ({ ...opp, winrate: computeWinrate(opp) }));
+}
+
+/**
+ * Plain-language execution steps (3-5) for a strategy opportunity.
+ * Fills the template with actual strike/bid/expiry from the contracts.
+ */
+function generateExecutionSteps(opp) {
+  const t = opp.ticker;
+  const c = opp.contracts || [];
+  const findCall = () => c.find((x) => (x["Type"] || "").toLowerCase() === "call");
+  const findPut  = () => c.find((x) => (x["Type"] || "").toLowerCase() === "put");
+  const dollars = (x) => Number.isFinite(x) ? `$${x.toFixed(0)}` : "$?";
+
+  switch (opp.strategy) {
+    case "iv_spike": {
+      const call = findCall(), put = findPut();
+      const callP = call ? num(call.Bid) * 100 : NaN;
+      const putP  = put  ? num(put.Bid)  * 100 : NaN;
+      const total = (Number.isFinite(callP) ? callP : 0) + (Number.isFinite(putP) ? putP : 0);
+      return [
+        "Открой брокерский счёт с доступом к опционам",
+        `Найди тикер $${t} в опционах`,
+        call ? `Продай call страйк $${call.Strike} экспирация ${call.Expiry} — получишь ${dollars(callP)}`
+             : "Найди OTM call для продажи",
+        put  ? `Одновременно продай put страйк $${put.Strike} экспирация ${put.Expiry} — получишь ${dollars(putP)}`
+             : "Найди OTM put для продажи",
+        `Итого на счёт: ${dollars(total)}. Позиция закрывается сама, если оба контракта истекут worthless.`,
+      ];
+    }
+    case "skew": {
+      const put = c[0], call = c[1];
+      const putP   = put  ? num(put.Bid)  * 100 : NaN;
+      const callC  = call ? num(call.Ask) * 100 : NaN;
+      const net    = (Number.isFinite(putP) ? putP : 0) - (Number.isFinite(callC) ? callC : 0);
+      return [
+        "Открой брокерский счёт с доступом к опционам",
+        `Найди тикер $${t}`,
+        put  ? `Продай put страйк $${put.Strike} экспирация ${put.Expiry} — получишь ${dollars(putP)}`
+             : "Продай дорогой OTM put",
+        call ? `Купи call страйк $${call.Strike} экспирация ${call.Expiry} — заплатишь ${dollars(callC)}`
+             : "Купи дешёвый OTM call",
+        `Чистый кредит: ${dollars(net)}. Получаешь синтетическую длинную позицию почти бесплатно.`,
+      ];
+    }
+    case "vol_arb": {
+      const near = c[0], far = c[1];
+      const sellP = near ? num(near.Bid) * 100 : NaN;
+      const buyC  = far  ? num(far.Ask)  * 100 : NaN;
+      const spread = (Number.isFinite(buyC) ? buyC : 0) - (Number.isFinite(sellP) ? sellP : 0);
+      return [
+        "Открой брокерский счёт с доступом к опционам",
+        `Найди $${t} — нужны опционы на две разные экспирации`,
+        near ? `Продай ${near.Type} ${near.Expiry} страйк $${near.Strike} — получишь ${dollars(sellP)}`
+             : "Продай ближнюю экспирацию",
+        far  ? `Купи такой же ${far.Type} ${far.Expiry} страйк $${far.Strike} — заплатишь ${dollars(buyC)}`
+             : "Купи дальнюю экспирацию",
+        `Стоимость спреда: ${dollars(spread)}. Профит если цена застынет около страйка к ближней экспирации.`,
+      ];
+    }
+    case "max_pain": {
+      const call = findCall(), put = findPut();
+      const strike = call?.Strike || put?.Strike || "?";
+      return [
+        "Открой брокерский счёт с доступом к опционам",
+        `Найди $${t} опционы на экспирацию ${opp.expiry}`,
+        `Продай call и put на страйке $${strike} (центр Iron Butterfly)`,
+        `Купи защитные крылья: call выше $${strike} и put ниже $${strike}`,
+        `Профит когда $${t} закроется около $${strike} к ${opp.expiry}.`,
+      ];
+    }
+    case "earnings": {
+      const call = findCall(), put = findPut();
+      const callP = call ? num(call.Bid) * 100 : NaN;
+      const putP  = put  ? num(put.Bid)  * 100 : NaN;
+      const total = (Number.isFinite(callP) ? callP : 0) + (Number.isFinite(putP) ? putP : 0);
+      return [
+        "Открой брокерский счёт с доступом к опционам",
+        `Найди $${t} опционы на ближайшую экспирацию`,
+        call ? `Продай ATM call $${call.Strike} — получишь ${dollars(callP)}`
+             : "Продай ATM call",
+        put  ? `Одновременно продай ATM put $${put.Strike} — получишь ${dollars(putP)}`
+             : "Продай ATM put",
+        `Получаешь ${dollars(total)}. Профит когда IV сойдёт и цена застабилизируется.`,
+      ];
+    }
+    case "gamma": {
+      const call = findCall(), put = findPut();
+      const callC = call ? num(call.Ask) * 100 : NaN;
+      const putC  = put  ? num(put.Ask)  * 100 : NaN;
+      const total = (Number.isFinite(callC) ? callC : 0) + (Number.isFinite(putC) ? putC : 0);
+      return [
+        "Открой брокерский счёт с доступом к опционам",
+        `Найди $${t} ATM опционы (Delta ≈ 0.50)`,
+        call ? `Купи call страйк $${call.Strike} — заплатишь ${dollars(callC)}`
+             : "Купи ATM call",
+        put  ? `Купи put такого же страйка $${put?.Strike} — заплатишь ${dollars(putC)}`
+             : "Купи ATM put",
+        `Итого: ${dollars(total)}. Профит если $${t} сильно сдвинется в любую сторону.`,
+      ];
+    }
+    default:
+      return ["Шаги исполнения не определены для этой стратегии"];
+  }
 }
 
 function detectAnomalies(rows, stats, horizonKey, today) {
@@ -590,6 +733,13 @@ export default function OptionsPage() {
   // Strategies mode produces a different data shape — keep separate state.
   const [strategies, setStrategies]     = useState([]);
   const [busyStratOppId, setBusyStratOppId] = useState(null);
+  const [scanTimestamp, setScanTimestamp] = useState(null);
+  // Filters for strategies mode (tickers checklist, expiry dropdown, min winrate).
+  const [stratFilters, setStratFilters] = useState({
+    tickers: new Set(WATCHLIST),
+    expiry: "",
+    minWinrate: 90,
+  });
 
   // ----- Claude interaction -----
   const [busyInterpretId, setBusyInterpretId] = useState(null);
@@ -784,6 +934,7 @@ export default function OptionsPage() {
 
       setStrategies(opportunities);
       setTickerStats(statsMap);
+      setScanTimestamp(new Date());
       setScanProgress(null);
       setScanLoading(false);
       return;
@@ -925,6 +1076,34 @@ export default function OptionsPage() {
     [tickerStats],
   );
 
+  // Strategies mode: apply user filters, sort by winrate desc, cap to top-20.
+  const filteredStrategies = useMemo(() => {
+    const expiryFv = stratFilters.expiry ? isoToFinviz(stratFilters.expiry) : "";
+    return strategies
+      .filter((o) => stratFilters.tickers.has(o.ticker))
+      .filter((o) => {
+        if (!expiryFv) return true;
+        if (o.strategy === "vol_arb") {
+          return o.expiryNear === expiryFv || o.expiryFar === expiryFv;
+        }
+        return o.expiry === expiryFv;
+      })
+      .filter((o) => (o.winrate ?? 0) >= stratFilters.minWinrate)
+      .sort((a, b) => (b.winrate ?? 0) - (a.winrate ?? 0))
+      .slice(0, 20);
+  }, [strategies, stratFilters]);
+
+  function toggleTicker(t) {
+    setStratFilters((f) => {
+      const next = new Set(f.tickers);
+      if (next.has(t)) next.delete(t); else next.add(t);
+      return { ...f, tickers: next };
+    });
+  }
+  function setAllTickers(on) {
+    setStratFilters((f) => ({ ...f, tickers: on ? new Set(WATCHLIST) : new Set() }));
+  }
+
   return (
     <div style={S.page}>
       <h1 style={S.title}>Опционный деск</h1>
@@ -1044,18 +1223,88 @@ export default function OptionsPage() {
         </div>
       ) : null}
 
-      {/* Strategies mode: opportunity cards instead of the spotlight/table */}
+      {/* Strategies mode: filters + opportunity cards */}
       {scanMode === "strategies" && strategies.length > 0 ? (
         <>
+          {/* Filter panel */}
+          <div style={S.filterPanel}>
+            <div style={S.filterGroup}>
+              <div style={S.filterTitle}>
+                Тикеры
+                <button
+                  style={S.filterSubBtn}
+                  onClick={() => setAllTickers(stratFilters.tickers.size !== WATCHLIST.length)}
+                >
+                  {stratFilters.tickers.size === WATCHLIST.length ? "Снять все" : "Выбрать все"}
+                </button>
+              </div>
+              <div style={S.checkRow}>
+                {WATCHLIST.map((t) => (
+                  <label key={t} style={S.checkLabel}>
+                    <input
+                      type="checkbox"
+                      checked={stratFilters.tickers.has(t)}
+                      onChange={() => toggleTicker(t)}
+                    />
+                    {t}
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div style={S.filterGroup}>
+              <div style={S.filterTitle}>Экспирация</div>
+              <select
+                style={{ ...S.inp, minWidth: 180 }}
+                value={stratFilters.expiry}
+                onChange={(e) => setStratFilters((f) => ({ ...f, expiry: e.target.value }))}
+              >
+                <option value="">Все даты</option>
+                {expiryOptions.map((o) => (
+                  <option key={o.iso} value={o.iso}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+
+            <div style={S.filterGroup}>
+              <div style={S.filterTitle}>Min winrate: <b>{stratFilters.minWinrate}%</b></div>
+              <input
+                type="range"
+                min={50}
+                max={95}
+                step={1}
+                value={stratFilters.minWinrate}
+                onChange={(e) =>
+                  setStratFilters((f) => ({ ...f, minWinrate: parseInt(e.target.value, 10) }))
+                }
+                style={S.range}
+              />
+            </div>
+          </div>
+
           <h3 style={S.h3Section}>
-            {SCAN_MODES.find((m) => m.v === "strategies")?.title} · найдено: {strategies.length}
+            {SCAN_MODES.find((m) => m.v === "strategies")?.title}
+            {" · показано "}{filteredStrategies.length}{" из "}{strategies.length}
+            {scanTimestamp ? (
+              <span style={S.freshness}>
+                {" · обновлено "}
+                {String(scanTimestamp.getDate()).padStart(2, "0")}.
+                {String(scanTimestamp.getMonth() + 1).padStart(2, "0")}{" "}
+                {String(scanTimestamp.getHours()).padStart(2, "0")}:
+                {String(scanTimestamp.getMinutes()).padStart(2, "0")}
+              </span>
+            ) : null}
           </h3>
+
           <div style={S.stratGrid}>
-            {strategies.map((opp) => {
+            {filteredStrategies.map((opp) => {
               const wrapped = opp.contracts.map((c) => ({
                 row: c, score: 0, signals: "", reasons: [opp.name],
               }));
               const isBusy = busyStratOppId === opp.id;
+              const wr = opp.winrate ?? 0;
+              const wrColor = wr > 80 ? "#22c55e" : (wr >= 65 ? "#eab308" : "#ef4444");
+              const steps = generateExecutionSteps(opp);
               return (
                 <div key={opp.id} style={S.stratCard}>
                   <div style={S.stratHead}>
@@ -1065,10 +1314,17 @@ export default function OptionsPage() {
                   <div style={S.stratTicker}>
                     ${opp.ticker}{opp.expiry ? ` · ${opp.expiry}` : ""}
                   </div>
+                  <div style={{ ...S.stratWinrate, color: wrColor }}>
+                    Winrate: {wr}%
+                  </div>
                   <div style={S.stratParams}>{opp.signalParams}</div>
                   <div style={S.stratConstruction}>{opp.construction}</div>
+                  <div style={S.stepsTitle}>Как исполнять:</div>
+                  <ol style={S.stepsList}>
+                    {steps.map((s, i) => <li key={i} style={S.stepItem}>{s}</li>)}
+                  </ol>
                   <button
-                    style={{ ...S.btnSm, marginTop: 10, width: "100%" }}
+                    style={{ ...S.btnSm, marginTop: "auto", width: "100%" }}
                     onClick={async () => {
                       setBusyStratOppId(opp.id);
                       try {
@@ -1085,6 +1341,13 @@ export default function OptionsPage() {
               );
             })}
           </div>
+
+          {filteredStrategies.length === 0 ? (
+            <div style={S.note}>
+              Под текущими фильтрами ни одна стратегия не прошла. Снизь min winrate,
+              расширь список тикеров или выбери «Все даты».
+            </div>
+          ) : null}
         </>
       ) : null}
 
@@ -1338,15 +1601,29 @@ const S = {
   tab:       { padding: "10px 18px", background: "#1a1c20", color: "#aaa", border: "1px solid #2a2d33", borderRadius: 6, cursor: "pointer", fontSize: 13, fontWeight: 500 },
   tabActive: { padding: "10px 18px", background: "#3b82f6", color: "#fff", border: "1px solid #3b82f6", borderRadius: 6, cursor: "pointer", fontSize: 13, fontWeight: 700 },
 
+  // Strategy filter panel (above the opportunity grid)
+  filterPanel:    { display: "flex", flexWrap: "wrap", gap: 24, padding: "14px 16px", background: "#161820", border: "1px solid #2a2d33", borderRadius: 6, marginBottom: 16 },
+  filterGroup:    { display: "flex", flexDirection: "column", gap: 6, minWidth: 200 },
+  filterTitle:    { color: "#bbb", fontSize: 12, fontWeight: 600, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 },
+  filterSubBtn:   { padding: "2px 8px", background: "#2a2d33", color: "#aaa", border: "none", borderRadius: 3, cursor: "pointer", fontSize: 10 },
+  checkRow:       { display: "flex", flexWrap: "wrap", gap: 6 },
+  checkLabel:     { display: "flex", alignItems: "center", gap: 3, fontSize: 12, color: "#ddd", cursor: "pointer", padding: "3px 6px", background: "#0d0e10", borderRadius: 3 },
+  range:          { width: 220, accentColor: "#3b82f6" },
+  freshness:      { color: "#666", fontSize: 11, fontWeight: 400, marginLeft: 8 },
+
   // Strategy opportunity cards (🧠 Стратегии mode)
-  stratGrid:        { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12, marginBottom: 20 },
+  stratGrid:        { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12, marginBottom: 20 },
   stratCard:        { background: "#161820", border: "1px solid #d97706", borderRadius: 8, padding: "14px 16px", display: "flex", flexDirection: "column" },
   stratHead:        { display: "flex", alignItems: "center", gap: 8, marginBottom: 8 },
   stratIcon:        { fontSize: 22 },
   stratName:        { color: "#fff", fontWeight: 700, fontSize: 13, letterSpacing: 0.3 },
   stratTicker:      { color: "#3b82f6", fontSize: 14, fontWeight: 600, marginBottom: 6 },
-  stratParams:      { color: "#bbb", fontSize: 12, marginBottom: 8, fontVariantNumeric: "tabular-nums" },
-  stratConstruction:{ color: "#d97706", fontSize: 12, fontStyle: "italic", lineHeight: 1.4, flex: 1 },
+  stratWinrate:     { fontSize: 18, fontWeight: 700, marginBottom: 6, fontVariantNumeric: "tabular-nums" },
+  stratParams:      { color: "#bbb", fontSize: 12, marginBottom: 6, fontVariantNumeric: "tabular-nums" },
+  stratConstruction:{ color: "#d97706", fontSize: 12, fontStyle: "italic", lineHeight: 1.4, marginBottom: 10 },
+  stepsTitle:       { color: "#aaa", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 },
+  stepsList:        { color: "#e6e6e6", fontSize: 12, lineHeight: 1.5, paddingLeft: 18, margin: "0 0 10px 0" },
+  stepItem:         { marginBottom: 2 },
 
   count:      { color: "#666", fontSize: 12 },
   progress:   { color: "#3b82f6", fontSize: 12, fontWeight: 500 },
