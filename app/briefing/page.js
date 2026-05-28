@@ -308,7 +308,10 @@ export default function BriefingPage() {
           // BOSS PROMPT инжектится сервером. Дополнительный caller-system —
           // короткий контекст: режим брифинга, использовать web_search.
           system: "Сейчас ты готовишь утренний финансовый брифинг по фондовому рынку США. Используй web_search для поиска актуальных данных. Только факты, без воды. Все цифры — из найденных источников, не выдумывай.",
-          useSearch: { maxUses: 12 },
+          // useSearch enabled + лимит 5 поисков. Объектная форма truthy →
+          // включает web_search tool, и max_uses кладёт жёсткий потолок.
+          // Меньше поисков = укладываемся в 10-секундный Vercel Hobby timeout.
+          useSearch: { maxUses: 5 },
         }),
       });
       // Read raw body first so we can show it verbatim even if JSON parse fails.
@@ -438,8 +441,8 @@ export default function BriefingPage() {
           <div style={S.loadingBox} data-no-print="true">
             <div style={S.loadingTitle}>● Claude собирает брифинг</div>
             <div style={S.loadingText}>
-              Идёт цикл web_search (до 12 запросов) → агрегация → структурирование.
-              Полный проход занимает 40-90 секунд. Не закрывай вкладку.
+              Идёт цикл web_search (до 5 запросов) → агрегация → структурирование.
+              Полный проход занимает 15-40 секунд. Не закрывай вкладку.
             </div>
           </div>
         )}
