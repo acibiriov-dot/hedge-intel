@@ -265,15 +265,34 @@ const OPTIONS_CONTEXT = `Сейчас ты анализируешь опцион
 Запрещено выдумывать страйки, цены, даты.
 Отвечаешь на русском языке.`;
 
+// Build a diagnostic block included in every error response. Surfaces enough
+// info to fix env/auth issues in production without revealing the full key.
+function buildDiag(apiKey, extras = {}) {
+  const k = apiKey || "";
+  return {
+    timestamp: new Date().toISOString(),
+    api_key_set: !!k,
+    api_key_length: k.length,
+    api_key_prefix: k ? k.slice(0, 20) + "…" : null,
+    api_key_has_trailing_whitespace: k !== k.trim(),
+    runtime: "vercel-serverless",
+    ...extras,
+  };
+}
+
 export async function POST(request) {
+  let apiKey = "";  // hoisted so the outer catch can include it in diag
   try {
     const body = await request.json();
     const { messages, useSearch, system } = body;
 
-    const apiKey = (process.env.ANTHROPIC_API_KEY || "").trim();
+    apiKey = (process.env.ANTHROPIC_API_KEY || "").trim();
     if (!apiKey) {
       return Response.json(
-        { error: "ANTHROPIC_API_KEY не задан на сервере" },
+        {
+          error: "ANTHROPIC_API_KEY не задан на сервере",
+          diag: buildDiag(apiKey, { stage: "env_check" }),
+        },
         { status: 500 }
       );
     }
@@ -282,11 +301,20 @@ export async function POST(request) {
     // research pass) or `{ maxUses: N }` to override per-request. Older callers
     // (/options interpret/strategy, /smart-strategy "ask Claude") pass `false`,
     // /briefing passes `true`.
+    //
+    // Anthropic web_search tool format (flat object inside top-level `tools`
+    // array — NOT wrapped, NOT nested). Reference:
+    //   https://docs.anthropic.com/en/docs/build-with-claude/tool-use
+    //   { "type": "web_search_20250305", "name": "web_search", "max_uses": N }
     const searchMaxUses = (typeof useSearch === "object" && useSearch?.maxUses)
       ? Math.max(1, Math.min(20, Number(useSearch.maxUses)))
       : 10;
     const tools = useSearch
-      ? [{ type: "web_search_20250305", name: "web_search", max_uses: searchMaxUses }]
+      ? [{
+          type: "web_search_20250305",
+          name: "web_search",
+          max_uses: searchMaxUses,
+        }]
       : undefined;
 
     // Prepend today's date to the system prompt so Claude grounds expiry /
@@ -327,6 +355,18 @@ export async function POST(request) {
         requestBody.tools = tools;
       }
 
+      // Log the outgoing request shape (no secrets) — visible in Vercel
+      // function logs. Useful for confirming tools format hits the wire as
+      // a flat array of {type, name, max_uses} and not wrapped in anything.
+      console.log("[analyze] iter", iters, "→ POST /v1/messages", {
+        model: requestBody.model,
+        max_tokens: requestBody.max_tokens,
+        message_count: requestBody.messages.length,
+        system_chars: requestBody.system?.length || 0,
+        tools: requestBody.tools,           // raw shape — should print as array
+        tools_is_array: Array.isArray(requestBody.tools),
+      });
+
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: {
@@ -338,13 +378,49 @@ export async function POST(request) {
       });
 
       if (res.status === 429) {
-        return Response.json({ error: "rate_limit" }, { status: 429 });
+        const err429 = await res.text().catch(() => "");
+        console.warn("[analyze] 429 rate_limit body:", err429.slice(0, 500));
+        return Response.json(
+          {
+            error: "rate_limit",
+            status: 429,
+            details: err429.slice(0, 1000),
+            diag: buildDiag(apiKey, { stage: "anthropic_response", iter: iters }),
+          },
+          { status: 429 }
+        );
       }
 
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        const msg = err?.error?.message || `HTTP ${res.status}`;
-        return Response.json({ error: msg }, { status: res.status });
+        // Capture both parsed-JSON and raw text in case the response isn't JSON.
+        const rawText = await res.text().catch(() => "");
+        let parsed = null;
+        try { parsed = JSON.parse(rawText); } catch {}
+        const upstreamMsg =
+          parsed?.error?.message ||
+          parsed?.error?.type ||
+          rawText.slice(0, 500) ||
+          `HTTP ${res.status}`;
+        console.error("[analyze] Anthropic error", {
+          status: res.status,
+          parsed: parsed?.error,
+          raw: rawText.slice(0, 500),
+        });
+        return Response.json(
+          {
+            error: `Anthropic API ${res.status}: ${upstreamMsg}`,
+            status: res.status,
+            anthropic_error: parsed?.error || null,
+            anthropic_raw: rawText.slice(0, 1500),
+            diag: buildDiag(apiKey, {
+              stage: "anthropic_response",
+              iter: iters,
+              request_had_tools: !!requestBody.tools,
+              tools_count: requestBody.tools?.length || 0,
+            }),
+          },
+          { status: res.status }
+        );
       }
 
       const data = await res.json();
@@ -375,6 +451,15 @@ export async function POST(request) {
     return Response.json({ text: finalText || "Анализ завершён." });
 
   } catch (err) {
-    return Response.json({ error: err.message || "Server error" }, { status: 500 });
+    console.error("[analyze] uncaught", err);
+    return Response.json(
+      {
+        error: err?.message || "Server error",
+        error_name: err?.name || null,
+        error_stack: err?.stack ? String(err.stack).slice(0, 1500) : null,
+        diag: buildDiag(apiKey, { stage: "exception" }),
+      },
+      { status: 500 }
+    );
   }
 }

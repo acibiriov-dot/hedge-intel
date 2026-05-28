@@ -247,6 +247,7 @@ export default function BriefingPage() {
   const [dateIso, setDateIso]  = useState("");          // YYYY-MM-DD
   const [loading, setLoading]  = useState(false);
   const [error, setError]      = useState("");
+  const [errorDetails, setErrorDetails] = useState(null); // full server response on failure
   const [briefing, setBriefing] = useState("");          // generated text
   const [generatedFor, setGeneratedFor] = useState(""); // human-readable date label
   const [copied, setCopied]    = useState(false);
@@ -278,6 +279,7 @@ export default function BriefingPage() {
 
   async function generate() {
     setError("");
+    setErrorDetails(null);
     setBriefing("");
     setCopied(false);
     const d = parseIso(dateIso);
@@ -309,9 +311,30 @@ export default function BriefingPage() {
           useSearch: { maxUses: 12 },
         }),
       });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
-      if (!data.text) throw new Error(data.error || "Пустой ответ от Claude");
+      // Read raw body first so we can show it verbatim even if JSON parse fails.
+      const rawText = await r.text();
+      let data = null;
+      try { data = JSON.parse(rawText); } catch {}
+
+      if (!r.ok) {
+        // Surface the full server payload — diag block, anthropic_error,
+        // anthropic_raw, error_stack. /api/analyze returns all of these on
+        // failure (see app/api/analyze/route.js).
+        setErrorDetails({
+          httpStatus: r.status,
+          parsedBody: data,
+          rawBody: !data ? rawText.slice(0, 2000) : null,
+        });
+        throw new Error(data?.error || `HTTP ${r.status} · см. блок ниже`);
+      }
+      if (!data?.text) {
+        setErrorDetails({
+          httpStatus: r.status,
+          parsedBody: data,
+          rawBody: null,
+        });
+        throw new Error(data?.error || "Пустой ответ от Claude");
+      }
       setBriefing(data.text);
       setGeneratedFor(todayUi);
     } catch (e) {
@@ -422,7 +445,51 @@ export default function BriefingPage() {
         )}
 
         {error && (
-          <div style={S.error} data-no-print="true">{error}</div>
+          <div style={S.errorBox} data-no-print="true">
+            <div style={S.errorTitle}>● ОШИБКА ГЕНЕРАЦИИ</div>
+            <div style={S.errorMain}>{error}</div>
+            {errorDetails && (
+              <>
+                <div style={S.errorSubTitle}>HTTP статус</div>
+                <div style={S.errorVal}>{errorDetails.httpStatus}</div>
+
+                {errorDetails.parsedBody?.anthropic_error && (
+                  <>
+                    <div style={S.errorSubTitle}>Anthropic error</div>
+                    <pre style={S.errorPre}>{JSON.stringify(errorDetails.parsedBody.anthropic_error, null, 2)}</pre>
+                  </>
+                )}
+
+                {errorDetails.parsedBody?.anthropic_raw && (
+                  <>
+                    <div style={S.errorSubTitle}>Anthropic raw response</div>
+                    <pre style={S.errorPre}>{errorDetails.parsedBody.anthropic_raw}</pre>
+                  </>
+                )}
+
+                {errorDetails.parsedBody?.diag && (
+                  <>
+                    <div style={S.errorSubTitle}>Server diagnostic</div>
+                    <pre style={S.errorPre}>{JSON.stringify(errorDetails.parsedBody.diag, null, 2)}</pre>
+                  </>
+                )}
+
+                {errorDetails.parsedBody?.error_stack && (
+                  <>
+                    <div style={S.errorSubTitle}>Stack trace</div>
+                    <pre style={S.errorPre}>{errorDetails.parsedBody.error_stack}</pre>
+                  </>
+                )}
+
+                {errorDetails.rawBody && (
+                  <>
+                    <div style={S.errorSubTitle}>Raw body (not JSON)</div>
+                    <pre style={S.errorPre}>{errorDetails.rawBody}</pre>
+                  </>
+                )}
+              </>
+            )}
+          </div>
         )}
 
         {briefing && (
@@ -500,6 +567,15 @@ const S = {
   btnEmerald: { padding: "12px 26px", background: C.emerald, color: "#000", border: "none", borderRadius: 2, cursor: "pointer", fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", fontFamily: FONT_MONO },
   errorInline: { color: C.red, marginTop: 8, fontSize: 12 },
   error: { padding: "12px 16px", background: "#1f0a0a", color: C.red, border: `1px solid ${C.red}`, borderRadius: 2, marginTop: 16, fontSize: 12, fontFamily: FONT_MONO },
+
+  // Detailed error block — surfaces the full server response so production
+  // failures are debuggable from the browser without opening Vercel logs.
+  errorBox:      { padding: "14px 18px", background: "#1f0a0a", border: `1px solid ${C.red}`, borderRadius: 2, marginTop: 16 },
+  errorTitle:    { color: C.red, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, fontFamily: FONT_MONO, marginBottom: 8 },
+  errorMain:     { color: "#ff9a9a", fontSize: 13, lineHeight: 1.5, fontFamily: FONT_SANS, marginBottom: 12 },
+  errorSubTitle: { color: C.red, fontSize: 9, fontWeight: 700, letterSpacing: 1.5, fontFamily: FONT_MONO, marginTop: 10, marginBottom: 4, textTransform: "uppercase", opacity: 0.85 },
+  errorVal:      { color: "#e6e6e6", fontSize: 12, fontFamily: FONT_MONO },
+  errorPre:      { margin: 0, padding: "8px 10px", background: "#120505", border: `1px solid rgba(239,68,68,0.3)`, borderRadius: 2, color: "#ffb8b8", fontSize: 11, fontFamily: FONT_MONO, whiteSpace: "pre-wrap", wordBreak: "break-word", maxHeight: 240, overflow: "auto", lineHeight: 1.55 },
 
   // Input row
   inputRow: { display: "flex", gap: 16, alignItems: "flex-end", marginBottom: 16, flexWrap: "wrap" },
