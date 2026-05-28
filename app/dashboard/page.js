@@ -253,6 +253,9 @@ export default function Dashboard() {
   return (
     <div style={S.page}>
       <div style={S.topBar}>
+        <a href="/briefing"       style={S.navLink}>☼ Briefing</a>
+        <a href="/strategies"     style={S.navLink}>◇ Strategies</a>
+        <a href="/covered-call"   style={S.navLink}>◆ Decision Engine</a>
         <a href="/smart-strategy" style={S.navLink}>⚡ Smart Strategy</a>
         <a href="/options"        style={S.navLink}>🎯 Опционный деск</a>
         <a href="/"               style={S.navLink}>📈 Hedge Intel</a>

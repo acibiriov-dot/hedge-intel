@@ -1,3 +1,8 @@
+// Vercel function timeout. Default Hobby = 10s (too short for a /briefing pass
+// that does ~10 web searches). Pro tier honors up to 60s; if your plan is
+// Hobby, briefing requests will likely 504 — upgrade or reduce search count.
+export const maxDuration = 60;
+
 // BOSS PROMPT — синхронизирован с ~/jarvis/memory/boss-prompt-v4.md.
 // Inline-литерал, а не fs.readFileSync: исходник лежит вне репо hedge-intel,
 // и в Vercel serverless-бандл не попадёт. При правке rubric обновлять и здесь.
@@ -273,8 +278,15 @@ export async function POST(request) {
       );
     }
 
+    // useSearch can be `true` (default 10 uses, enough for a deep briefing-style
+    // research pass) or `{ maxUses: N }` to override per-request. Older callers
+    // (/options interpret/strategy, /smart-strategy "ask Claude") pass `false`,
+    // /briefing passes `true`.
+    const searchMaxUses = (typeof useSearch === "object" && useSearch?.maxUses)
+      ? Math.max(1, Math.min(20, Number(useSearch.maxUses)))
+      : 10;
     const tools = useSearch
-      ? [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }]
+      ? [{ type: "web_search_20250305", name: "web_search", max_uses: searchMaxUses }]
       : undefined;
 
     // Prepend today's date to the system prompt so Claude grounds expiry /
