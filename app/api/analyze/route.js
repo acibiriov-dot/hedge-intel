@@ -345,8 +345,8 @@ export async function POST(request) {
       iters++;
 
       const requestBody = {
-        model: "claude-sonnet-4-6",
-        max_tokens: 6000,
+        model: "claude-sonnet-4-5-20250929",
+        max_tokens: 8000,
         system: systemWithDate,
         messages: msgs,
       };
