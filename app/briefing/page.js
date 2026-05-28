@@ -208,8 +208,17 @@ const MONTHS_RU = [
   "июля", "августа", "сентября", "октября", "ноября", "декабря",
 ];
 
+/** Russian human-readable: "28 мая 2026" — used INSIDE the prompt to Claude. */
 function fmtRu(d) {
   return `${d.getDate()} ${MONTHS_RU[d.getMonth()]} ${d.getFullYear()}`;
+}
+
+/** DD.MM.YYYY — used ONLY for displaying the date back to the user in the UI. */
+function fmtDdMmYyyy(d) {
+  if (!d || isNaN(d.getTime())) return "—";
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  return `${dd}.${mm}.${d.getFullYear()}`;
 }
 
 function isoToday() {
@@ -258,12 +267,13 @@ export default function BriefingPage() {
     setHasAccess(false); setPasswordInput("");
   }
 
+  // UI preview: DD.MM.YYYY (the prompt itself still gets the Russian form below).
   const datePreview = useMemo(() => {
     const d = parseIso(dateIso);
     if (isNaN(d)) return { today: "—", yesterday: "—" };
     const yest = new Date(d);
     yest.setDate(yest.getDate() - 1);
-    return { today: fmtRu(d), yesterday: fmtRu(yest) };
+    return { today: fmtDdMmYyyy(d), yesterday: fmtDdMmYyyy(yest) };
   }, [dateIso]);
 
   async function generate() {
@@ -272,15 +282,19 @@ export default function BriefingPage() {
     setCopied(false);
     const d = parseIso(dateIso);
     if (isNaN(d)) { setError("Некорректная дата"); return; }
-    const today = fmtRu(d);
     const yest = new Date(d);
     yest.setDate(yest.getDate() - 1);
-    const yesterday = fmtRu(yest);
+
+    // Prompt uses Russian "28 мая 2026" (Claude reads it natively),
+    // UI label uses DD.MM.YYYY (the user expects standard local notation).
+    const todayRu     = fmtRu(d);
+    const yesterdayRu = fmtRu(yest);
+    const todayUi     = fmtDdMmYyyy(d);
 
     const userPrompt = BRIEFING_PROMPT
-      .replaceAll("[ВЧЕРАШНЯЯ ДАТА]", yesterday)
-      .replaceAll("[СЕГОДНЯШНЯЯ ДАТА]", today)
-      .replaceAll("[ДАТА]", today);
+      .replaceAll("[ВЧЕРАШНЯЯ ДАТА]", yesterdayRu)
+      .replaceAll("[СЕГОДНЯШНЯЯ ДАТА]", todayRu)
+      .replaceAll("[ДАТА]", todayRu);
 
     setLoading(true);
     try {
@@ -299,7 +313,7 @@ export default function BriefingPage() {
       if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
       if (!data.text) throw new Error(data.error || "Пустой ответ от Claude");
       setBriefing(data.text);
-      setGeneratedFor(today);
+      setGeneratedFor(todayUi);
     } catch (e) {
       setError(e.message || "Ошибка при генерации");
     }
