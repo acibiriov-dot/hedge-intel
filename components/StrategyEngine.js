@@ -508,12 +508,14 @@ function buildExplanation(cand, capital, spot, expiry, ticker) {
   if (cand.kind === "covered_call") {
     const K = cand.strikes[0];
     const be = cand.breakevenLow;
+    const shares = N * 100;
+    const stockCost = shares * spot;
     return [
-      `У вас должны быть ${N * 100} ${ctrShareWord(N * 100)} ${ticker} (это инвестиция, не убыток).`,
-      `Продайте ${N} ${callWord(N)} на $${K} с экспирацией ${expiry} — премия ${fmtUsd(totalPremium, 0)} сразу.`,
-      `Ниже $${K} к дате — премия ваша, акции остаются. Выше $${K} — акции выкупят по $${K}, итог = премия + рост до страйка = ${fmtUsd(totalMaxProfit, 0)} (потолок прибыли — выше страйка дохода больше не будет).`,
+      `Купите ${shares} ${ctrShareWord(shares)} ${ticker} по ${fmtUsd(spot)} — вложение ${fmtUsd(stockCost, 0)}.`,
+      `Продайте ${N} ${callWord(N)} на $${K} с экспирацией ${expiry} — получите премию ${fmtUsd(totalPremium, 0)} сразу.`,
+      `Ниже $${K} к дате — премия ваша, акции остаются. Выше $${K} — акции заберут по $${K}, итог = премия + рост до страйка = ${fmtUsd(totalMaxProfit, 0)} (потолок прибыли — выше страйка дохода больше не будет).`,
       `Проданный колл покрыт акциями — неограниченного риска у короткой ноги нет.`,
-      `Риск ВЛАДЕНИЯ акцией (падение к нулю) сниженный премией: ${fmtUsd(totalMaxLoss, 0)} в худшем случае, точка безубытка ${fmtUsd(be)}.`,
+      `Риск — падение ${ticker}, снижен премией на ${fmtUsd(cand.premium / 100)}/акцию: точка безубытка ${fmtUsd(be)}, в худшем случае (акция в ноль) — ${fmtUsd(totalMaxLoss, 0)}.`,
     ].join(" ");
   }
 
@@ -847,31 +849,37 @@ function DetailCard({ c, capital, spot, expiry, ticker }) {
         <div style={S.bigWinVal}>≈ {fmtPct(c.winratePct)}</div>
         <div style={S.bigWinSub}>Приближение через дельту, не точный win rate</div>
 
-        {/* Расчёт контрактов — явный блок «занято / остаётся». */}
-        <div style={enough ? S.contractsBlock : S.contractsBlockWarn}>
-          {enough ? (
-            <>
-              <div style={S.contractsLine}>
-                <span style={S.contractsBig}>{N}</span>
-                <span style={S.contractsBigSub}>{contractWord(N)} под {fmtUsd(capital, 0)}</span>
-              </div>
-              <div style={S.contractsMeta}>
-                Занято <span style={S.contractsMetaNum}>{fmtUsd(usedCapital, 0)}</span> ·
-                {" "}Остаётся <span style={S.contractsMetaNum}>{fmtUsd(remaining, 0)}</span>
-              </div>
-            </>
-          ) : (
-            <>
-              <div style={S.contractsWarnTitle}>Капитала недостаточно</div>
-              <div style={S.contractsWarnBody}>
-                На 1 контракт требуется <span style={S.contractsMetaNum}>{fmtUsd(c.capitalAtRisk, 0)}</span>,
-                у вас <span style={S.contractsMetaNum}>{fmtUsd(capital, 0)}</span>. Увеличьте капитал
-                минимум до <span style={S.contractsMetaNum}>{fmtUsd(c.capitalAtRisk, 0)}</span> или
-                выберите другой страйк / стратегию.
-              </div>
-            </>
-          )}
-        </div>
+        {/* Расчёт позиции — для Covered Call показываем ОБА денежных потока
+            (покупка акций + продажа коллов) явно. Для остальных — обычный
+            блок «занято / остаётся». */}
+        {c.kind === "covered_call" && enough ? (
+          <CoveredCallCashFlow c={c} capital={capital} spot={spot} N={N} ticker={ticker} />
+        ) : (
+          <div style={enough ? S.contractsBlock : S.contractsBlockWarn}>
+            {enough ? (
+              <>
+                <div style={S.contractsLine}>
+                  <span style={S.contractsBig}>{N}</span>
+                  <span style={S.contractsBigSub}>{contractWord(N)} под {fmtUsd(capital, 0)}</span>
+                </div>
+                <div style={S.contractsMeta}>
+                  Занято <span style={S.contractsMetaNum}>{fmtUsd(usedCapital, 0)}</span> ·
+                  {" "}Остаётся <span style={S.contractsMetaNum}>{fmtUsd(remaining, 0)}</span>
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={S.contractsWarnTitle}>Капитала недостаточно</div>
+                <div style={S.contractsWarnBody}>
+                  На 1 контракт требуется <span style={S.contractsMetaNum}>{fmtUsd(c.capitalAtRisk, 0)}</span>,
+                  у вас <span style={S.contractsMetaNum}>{fmtUsd(capital, 0)}</span>. Увеличьте капитал
+                  минимум до <span style={S.contractsMetaNum}>{fmtUsd(c.capitalAtRisk, 0)}</span> или
+                  выберите другой страйк / стратегию.
+                </div>
+              </>
+            )}
+          </div>
+        )}
 
         <div style={S.detailMetricRow}>
           <div>
@@ -949,6 +957,69 @@ function contractWord(n) {
   if (n === 1) return "контракт";
   if (n >= 2 && n <= 4) return "контракта";
   return "контрактов";
+}
+
+// Специальный блок для Covered Call — два явных денежных потока:
+// 1) покупка акций (расход), 2) продажа коллов (доход сразу).
+// Остаток подаётся честно: «меньше цены 100 акций, коллом не покрывается».
+function CoveredCallCashFlow({ c, capital, spot, N, ticker }) {
+  // prem за акцию = premium per contract / 100.
+  const premPerShare = c.premium / 100;
+  const shares       = N * 100;
+  const stockCost    = shares * spot;
+  const premIncome   = N * c.premium;
+  const remainder    = capital - stockCost;
+  const t            = ticker || "акции";
+
+  return (
+    <div style={S.ccCash}>
+      <div style={S.ccCashHeader}>
+        <span style={S.ccCashHeadBig}>{N}</span>
+        <span style={S.ccCashHeadSub}>
+          {contractWord(N)} ({shares} {ctrShareWord(shares)} под {fmtUsd(capital, 0)})
+        </span>
+      </div>
+
+      {/* Расход — покупка акций */}
+      <div style={S.ccCashFlow}>
+        <div style={S.ccCashFlowLabel}>Покупка акций (расход)</div>
+        <div style={S.ccCashFlowRow}>
+          <span style={S.ccCashFlowFormula}>
+            {shares} × {fmtUsd(spot)}
+          </span>
+          <span style={S.ccCashFlowAmountOut}>
+            −{fmtUsd(stockCost, 0)}
+          </span>
+        </div>
+      </div>
+
+      {/* Доход — премия от продажи коллов */}
+      <div style={S.ccCashFlow}>
+        <div style={S.ccCashFlowLabel}>Продажа коллов (доход сразу)</div>
+        <div style={S.ccCashFlowRow}>
+          <span style={S.ccCashFlowFormula}>
+            {N} × {fmtUsd(c.premium, 0)}
+          </span>
+          <span style={S.ccCashFlowAmountIn}>
+            +{fmtUsd(premIncome, 0)}
+          </span>
+        </div>
+      </div>
+
+      {/* Итог по входу */}
+      <div style={S.ccCashSummary}>
+        Итог входа: вложено <span style={S.ccCashSummaryNum}>{fmtUsd(stockCost, 0)}</span>
+        {" "}в {t}, получено премии{" "}
+        <span style={{ ...S.ccCashSummaryNum, color: C.marketUp }}>{fmtUsd(premIncome, 0)}</span>
+      </div>
+
+      {/* Остаток — честное объяснение */}
+      <div style={S.ccCashRest}>
+        Остаток <span style={S.ccCashRestNum}>{fmtUsd(remainder, 0)}</span>
+        {" "}— меньше цены 100 акций (${fmtUsd(spot * 100, 0)}), коллом не покрывается.
+      </div>
+    </div>
+  );
 }
 
 // ============================================================================
@@ -1088,6 +1159,30 @@ const S = {
   contractsMetaNum: { color: C.textPrimary, fontFamily: FONT_MONO, fontVariantNumeric: "tabular-nums" },
   contractsWarnTitle: { color: C.marketWarning, fontSize: 12, fontWeight: 600, marginBottom: 4 },
   contractsWarnBody:  { color: C.textSecondary, fontSize: 11, lineHeight: 1.5 },
+
+  // Covered Call — спец-блок с двумя денежными потоками.
+  ccCash: {
+    background: C.bgAlt, border: `1px solid ${C.divider}`,
+    borderLeft: `3px solid ${C.petrol}`,
+    borderRadius: 8, padding: "12px 14px",
+    marginBottom: 14,
+  },
+  ccCashHeader: { display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10 },
+  ccCashHeadBig: { color: C.textWhite, fontSize: 24, fontWeight: 600, fontFamily: FONT_MONO, fontVariantNumeric: "tabular-nums" },
+  ccCashHeadSub: { color: C.textSecondary, fontSize: 11 },
+
+  ccCashFlow:        { borderTop: `1px solid ${C.divider}`, paddingTop: 8, paddingBottom: 6 },
+  ccCashFlowLabel:   { color: C.textSecondary, fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 },
+  ccCashFlowRow:     { display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 },
+  ccCashFlowFormula: { color: C.textPrimary, fontSize: 13, fontFamily: FONT_MONO, fontVariantNumeric: "tabular-nums" },
+  ccCashFlowAmountOut: { color: C.marketDown, fontSize: 16, fontWeight: 600, fontFamily: FONT_MONO, fontVariantNumeric: "tabular-nums" },
+  ccCashFlowAmountIn:  { color: C.marketUp,   fontSize: 16, fontWeight: 600, fontFamily: FONT_MONO, fontVariantNumeric: "tabular-nums" },
+
+  ccCashSummary:    { marginTop: 10, paddingTop: 10, borderTop: `1px solid ${C.divider}`, color: C.textPrimary, fontSize: 12, lineHeight: 1.55 },
+  ccCashSummaryNum: { color: C.textWhite, fontFamily: FONT_MONO, fontVariantNumeric: "tabular-nums", fontWeight: 600 },
+
+  ccCashRest:    { marginTop: 8, color: C.textSecondary, fontSize: 11, lineHeight: 1.5, fontStyle: "italic" },
+  ccCashRestNum: { color: C.textPrimary, fontFamily: FONT_MONO, fontVariantNumeric: "tabular-nums", fontStyle: "normal" },
   detailMetricRow: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 12 },
   detailMetricKey: { color: C.textSecondary, fontSize: 10, fontWeight: 500, textTransform: "uppercase", letterSpacing: 1, marginBottom: 3 },
   detailMetricVal: { color: C.textWhite, fontSize: 16, fontWeight: 600, fontFamily: FONT_MONO, fontVariantNumeric: "tabular-nums" },
