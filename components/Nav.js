@@ -23,16 +23,15 @@ import { useEffect, useState } from "react";
 
 const KEY_ACCESS = "hi_access";
 
-// Порядок строго по задаче. /decision-engine — будущая страница,
-// /covered-call намеренно убран из меню (страница пока остаётся в файлах).
+// Порядок строго по задаче. /covered-call и /decision-engine намеренно
+// убраны из меню (страницы пока остаются в файлах).
 const NAV_ITEMS = [
-  { href: "/dashboard",       label: "Главная" },
-  { href: "/options",         label: "Анализ опционов" },
-  { href: "/volatility",      label: "Волатильность" },
-  { href: "/strategies",      label: "Стратегии" },
-  { href: "/smart-strategy",  label: "Умная стратегия" },
-  { href: "/decision-engine", label: "Движок решений" },
-  { href: "/briefing",        label: "Брифинг" },
+  { href: "/dashboard",      label: "Главная" },
+  { href: "/options",        label: "Анализ опционов" },
+  { href: "/volatility",     label: "Волатильность" },
+  { href: "/strategies",     label: "Стратегии" },
+  { href: "/smart-strategy", label: "Умная стратегия" },
+  { href: "/briefing",       label: "Брифинг" },
 ];
 
 export default function Nav() {
