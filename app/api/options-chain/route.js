@@ -359,6 +359,8 @@ async function handlePerExpiry({ apiKey, ticker, expiry }) {
       finvizExpiryRows: finviz.rows?.length || 0,
       finvizError: finviz.error || null,
       finvizStatus: finviz.status,
+      finvizColumns: finviz.columns || null,
+      finvizSampleRow: finviz.rows?.[0] || null,
       massiveExpiryContracts: massiveContracts.length,
       massiveError: massive.ok ? null : massive.error,
       contractsFromFinviz,
