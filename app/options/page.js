@@ -760,17 +760,13 @@ export default function OptionsPage() {
   function tryLogin() {
     if (passwordInput === PASSWORD) {
       try { localStorage.setItem(KEY_ACCESS, "1"); } catch {}
+      try { window.dispatchEvent(new Event("hi-access-changed")); } catch {}
       setHasAccess(true);
       setPasswordError("");
       setPasswordInput("");
     } else {
       setPasswordError("Неверный пароль");
     }
-  }
-  function logout() {
-    try { localStorage.removeItem(KEY_ACCESS); } catch {}
-    setHasAccess(false);
-    setPasswordInput("");
   }
 
   // ----- single-ticker load -----
@@ -1131,12 +1127,6 @@ export default function OptionsPage() {
 
   return (
     <div style={S.page}>
-      <div style={{ position: "absolute", top: 18, right: 24, display: "flex", gap: 8 }}>
-        <a href="/briefing" style={{ padding: "6px 12px", background: "#1a1c20", color: "#10b981", border: "1px solid #10b981", borderRadius: 4, fontSize: 12, fontWeight: 600, textDecoration: "none" }}>☼ Briefing</a>
-        <a href="/dashboard" style={{ padding: "6px 12px", background: "#1a1c20", color: "#4caf50", border: "1px solid #4caf50", borderRadius: 4, fontSize: 12, fontWeight: 600, textDecoration: "none" }}>🎛 Dashboard</a>
-        <a href="/smart-strategy" style={{ padding: "6px 12px", background: "#1a1c20", color: "#d97706", border: "1px solid #d97706", borderRadius: 4, fontSize: 12, fontWeight: 600, textDecoration: "none" }}>⚡ Smart Strategy</a>
-        <button style={{ ...S.logoutBtn, position: "static" }} onClick={logout} title="Сбросить доступ">Выйти</button>
-      </div>
       <h1 style={S.title}>Опционный деск</h1>
       <p style={S.subtitle}>
         Скоринг 0-100 · 🐂 / 🐻 / ⚡ сигналы · Claude-интерпретация простым языком ·

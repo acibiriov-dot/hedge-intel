@@ -473,12 +473,9 @@ export default function StrategyLibrary() {
   function tryLogin() {
     if (passwordInput === PASSWORD) {
       try { localStorage.setItem(KEY_ACCESS, "1"); } catch {}
+      try { window.dispatchEvent(new Event("hi-access-changed")); } catch {}
       setHasAccess(true); setPasswordError(""); setPasswordInput("");
     } else { setPasswordError("Неверный пароль"); }
-  }
-  function logout() {
-    try { localStorage.removeItem(KEY_ACCESS); } catch {}
-    setHasAccess(false); setPasswordInput("");
   }
 
   // ----- filter state -----
@@ -518,16 +515,6 @@ export default function StrategyLibrary() {
 
   return (
     <div style={S.page}>
-      <div style={S.topBar}>
-        <a href="/briefing"       style={S.navLink}>Briefing</a>
-        <a href="/volatility"     style={S.navLink}>Vol Lab</a>
-        <a href="/dashboard"      style={S.navLink}>Dashboard</a>
-        <a href="/covered-call"   style={S.navLink}>Decision Engine</a>
-        <a href="/smart-strategy" style={S.navLink}>Smart Strategy</a>
-        <a href="/options"        style={S.navLink}>Options Desk</a>
-        <button style={S.navLink} onClick={logout}>Logout</button>
-      </div>
-
       <div style={S.heading}>
         <div style={S.brand}>STRATEGY LIBRARY</div>
         <div style={S.brandSub}>15 options strategies · simple → complex · live edge vs SPY regime</div>

@@ -260,12 +260,9 @@ export default function BriefingPage() {
   function tryLogin() {
     if (passwordInput === PASSWORD) {
       try { localStorage.setItem(KEY_ACCESS, "1"); } catch {}
+      try { window.dispatchEvent(new Event("hi-access-changed")); } catch {}
       setHasAccess(true); setPasswordError(""); setPasswordInput("");
     } else { setPasswordError("Неверный пароль"); }
-  }
-  function logout() {
-    try { localStorage.removeItem(KEY_ACCESS); } catch {}
-    setHasAccess(false); setPasswordInput("");
   }
 
   // UI preview: DD.MM.YYYY (the prompt itself still gets the Russian form below).
@@ -403,15 +400,6 @@ export default function BriefingPage() {
       `}</style>
 
       <div style={S.page}>
-        <div style={S.topBar} data-no-print="true">
-          <a href="/dashboard"      style={S.navLink}>Dashboard</a>
-          <a href="/strategies"     style={S.navLink}>Strategies</a>
-          <a href="/covered-call"   style={S.navLink}>Decision Engine</a>
-          <a href="/smart-strategy" style={S.navLink}>Smart Strategy</a>
-          <a href="/options"        style={S.navLink}>Options Desk</a>
-          <button style={S.navLink} onClick={logout}>Logout</button>
-        </div>
-
         <div style={S.heading} data-no-print="true">
           <div style={S.brand}>MORNING BRIEFING</div>
           <div style={S.brandSub}>US stock market intelligence · web-search enabled</div>

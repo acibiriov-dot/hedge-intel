@@ -83,12 +83,10 @@ export default function VolatilityLab() {
   function tryLogin() {
     if (passwordInput === PASSWORD) {
       try { localStorage.setItem(KEY_ACCESS, "1"); } catch {}
+      // Уведомляем общий Nav (components/Nav.js) что доступ открыт.
+      try { window.dispatchEvent(new Event("hi-access-changed")); } catch {}
       setHasAccess(true); setPasswordError(""); setPasswordInput("");
     } else { setPasswordError("Неверный пароль"); }
-  }
-  function logout() {
-    try { localStorage.removeItem(KEY_ACCESS); } catch {}
-    setHasAccess(false); setPasswordInput("");
   }
 
   async function analyze() {
@@ -151,16 +149,6 @@ export default function VolatilityLab() {
 
   return (
     <div style={S.page}>
-      <div style={S.topBar}>
-        <a href="/briefing"       style={S.navLink}>Briefing</a>
-        <a href="/dashboard"      style={S.navLink}>Dashboard</a>
-        <a href="/strategies"     style={S.navLink}>Strategies</a>
-        <a href="/covered-call"   style={S.navLink}>Decision Engine</a>
-        <a href="/smart-strategy" style={S.navLink}>Smart Strategy</a>
-        <a href="/options"        style={S.navLink}>Options Desk</a>
-        <button style={S.navLink} onClick={logout}>Logout</button>
-      </div>
-
       <div style={S.heading}>
         <div style={S.brand}>VOLATILITY LAB</div>
         <div style={S.brandSub}>

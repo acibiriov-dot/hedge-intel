@@ -205,14 +205,11 @@ export default function Dashboard() {
   function tryLogin() {
     if (passwordInput === PASSWORD) {
       try { localStorage.setItem(KEY_ACCESS, "1"); } catch {}
+      try { window.dispatchEvent(new Event("hi-access-changed")); } catch {}
       setHasAccess(true); setPasswordError(""); setPasswordInput("");
     } else {
       setPasswordError("Неверный пароль");
     }
-  }
-  function logout() {
-    try { localStorage.removeItem(KEY_ACCESS); } catch {}
-    setHasAccess(false); setPasswordInput("");
   }
 
   const parts = useMemo(() => mskParts(now), [now]);
@@ -252,16 +249,6 @@ export default function Dashboard() {
 
   return (
     <div style={S.page}>
-      <div style={S.topBar}>
-        <a href="/briefing"       style={S.navLink}>☼ Briefing</a>
-        <a href="/strategies"     style={S.navLink}>◇ Strategies</a>
-        <a href="/covered-call"   style={S.navLink}>◆ Decision Engine</a>
-        <a href="/smart-strategy" style={S.navLink}>⚡ Smart Strategy</a>
-        <a href="/options"        style={S.navLink}>🎯 Опционный деск</a>
-        <a href="/"               style={S.navLink}>📈 Hedge Intel</a>
-        <button style={S.logoutBtn} onClick={logout} title="Сбросить доступ">Выйти</button>
-      </div>
-
       <h1 style={S.title}>JARVIS Command Centre</h1>
       <p style={S.subtitle}>
         Статус системы и быстрые действия. Данные обновляются при загрузке страницы и тикают раз в минуту.
