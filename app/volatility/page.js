@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
+import StrategyEngine from "../../components/StrategyEngine";
 
 // Shared access gate with other private hedge-intel pages.
 const KEY_ACCESS = "hi_access";
@@ -228,6 +229,22 @@ export default function VolatilityLab() {
           {/* D. Recommendation */}
           <SectionTitle num="04" name="Strategy Recommendation" />
           <Recommendation iv={derived.ivAvg} />
+
+          {/* E. Strategy Engine — продажа премии, автоподбор + ручной выбор.
+              Питается уже загруженными контрактами выбранной даты, ничего
+              дополнительно не запрашивает. */}
+          <SectionTitle
+            num="05"
+            name="Движок стратегий"
+            hint={`${derived.expiry} · спот ${meta?.underlyingPrice != null ? "$" + meta.underlyingPrice.toFixed(2) : "—"}`}
+          />
+          <StrategyEngine
+            contracts={contractsByExpiry.get(selectedExpiry)}
+            spot={meta?.underlyingPrice}
+            expiry={selectedExpiry}
+            ivAvgPct={derived.ivAvg}
+            ticker={meta?.ticker}
+          />
         </>
       )}
     </div>

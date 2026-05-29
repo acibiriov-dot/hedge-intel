@@ -277,6 +277,8 @@ function buildContractFromFinviz(fv, massiveMaybe, expiryHint = null) {
   if (!type || !Number.isFinite(strike) || !expIso) return null;
 
   // Premium priority: Last Close → Mid(Bid,Ask) → Ask → Bid.
+  // bid/ask также сохраняем отдельно — нужны движку стратегий: при продаже
+  // премии берём bid (что реально получим), при покупке защитного крыла — ask.
   const lastClose = parseFvNum(fv["Last Close"]);
   const bid = parseFvNum(fv.Bid);
   const ask = parseFvNum(fv.Ask);
@@ -308,6 +310,8 @@ function buildContractFromFinviz(fv, massiveMaybe, expiryHint = null) {
     iv:           fvIvDec ?? massiveMaybe?.iv     ?? null,
     openInterest: parseFvNum(fv["Open Int."]) ?? massiveMaybe?.openInterest ?? null,
     volume:       parseFvNum(fv.Volume)       ?? massiveMaybe?.volume       ?? null,
+    bid:          bid != null && bid >= 0 ? bid : null,
+    ask:          ask != null && ask >= 0 ? ask : null,
     marketPremium: premium,
     premiumSource,
     greeksSource: greeksFromFinviz ? "finviz" : (greeksFromMassive ? "massive" : "none"),
@@ -363,6 +367,8 @@ function assembleContracts(finvizRows, massiveByKey, expiryHint = null) {
     contractsFromFinviz++;
   }
   // Massive-only: контракты которых Finviz не отдал (пропущенные страйки).
+  // bid/ask на Starter плане Massive не отдаёт → null. Движок стратегий
+  // безопасно отфильтрует такие строки (требуется bid для премии).
   for (const [key, m] of massiveByKey) {
     if (seenKeys.has(key)) continue;
     contracts.push({
@@ -371,6 +377,7 @@ function assembleContracts(finvizRows, massiveByKey, expiryHint = null) {
       delta: m.delta, gamma: m.gamma, theta: m.theta, vega: m.vega,
       iv: m.iv,
       openInterest: m.openInterest, volume: m.volume,
+      bid: null, ask: null,
       marketPremium: m.last ?? null,
       premiumSource: m.last != null ? "massive_day_close" : null,
       greeksSource: m.delta != null ? "massive" : "none",
