@@ -26,6 +26,25 @@ const API_BASE_PRIMARY  = "https://api.polygon.io";
 const API_BASE_FALLBACK = "https://api.massive.com";
 const CONTRACT_LIMIT = 250;
 
+// FMP — best-effort fetch для underlying price. Starter Massive план не
+// всегда отдаёт underlying_asset.price → FMP как defensive fallback.
+// Если FMP_API_KEY не задан или запрос упал — просто пропускаем,
+// клиент получит Massive'ский underlyingPrice (или null).
+async function fetchFmpPrice(ticker) {
+  const key = (process.env.FMP_API_KEY || "").trim();
+  if (!key) return { price: null, source: "fmp_unconfigured" };
+  try {
+    const url = `https://financialmodelingprep.com/api/v3/quote/${encodeURIComponent(ticker)}?apikey=${encodeURIComponent(key)}`;
+    const r = await fetch(url, { cache: "no-store" });
+    if (!r.ok) return { price: null, source: `fmp_${r.status}` };
+    const arr = await r.json();
+    const price = Array.isArray(arr) && arr[0]?.price;
+    return { price: typeof price === "number" && Number.isFinite(price) ? price : null, source: "fmp" };
+  } catch {
+    return { price: null, source: "fmp_error" };
+  }
+}
+
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
   const tickerRaw = (searchParams.get("ticker") || "").trim().toUpperCase();
@@ -107,13 +126,27 @@ export async function GET(request) {
     // Normalize контракты в плоскую форму. Underlying price берём из первого
     // контракта (он одинаков для всех — это spot price базового актива).
     const contracts = data.results.map(normalizeContract).filter(Boolean);
-    const underlyingPrice = data.results[0]?.underlying_asset?.price ?? null;
+    const massivePrice = data.results[0]?.underlying_asset?.price ?? null;
+
+    // FMP — defensive fallback для underlying. Starter Massive план иногда
+    // не отдаёт underlying_asset.price → нужен для Black-Scholes на клиенте.
+    // Делаем параллельно с уже завершённым Massive (но всё равно exec — он
+    // быстрый, ~150ms). Без await блокировки бы не было, но fmpResult'у
+    // нужен await перед сериализацией.
+    const fmp = await fetchFmpPrice(tickerRaw);
+    const underlyingPrice = fmp.price ?? massivePrice;
 
     return Response.json({
       ok: true,
       base,
       ticker: tickerRaw,
       underlyingPrice,
+      priceSources: {
+        massive: massivePrice,
+        fmp: fmp.price,
+        used: underlyingPrice === fmp.price && fmp.price != null ? "fmp" : "massive",
+        fmp_status: fmp.source,
+      },
       contractCount: contracts.length,
       contracts,
       tried,
