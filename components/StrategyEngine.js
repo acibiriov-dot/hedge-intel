@@ -57,24 +57,50 @@ const FONT_MONO = "'IBM Plex Mono', 'JetBrains Mono', ui-monospace, SFMono-Regul
 // Helpers
 // ============================================================================
 
-// Вернуть bid, упав на marketPremium / Mid если bid отсутствует.
-// Для продажи опциона консервативно лучше bid (что точно получим).
+// Цена продажи опциона — ТОЛЬКО живая котировка, без Last Close fallback'а.
+// На неликвидных страйках Last Close — это стухшая цена многомесячной давности,
+// она даёт фейковые $200 премии там где реально торгуется $0.05. Movok отбраковка.
+// Приоритет:
+//   Mid = (bid+ask)/2 если bid > 0 И ask > 0 — middle of spread
+//   bid если только bid > 0 (консервативно)
+//   null если bid отсутствует или равен 0 (страйк не торгуется)
 function getSellPrice(c) {
-  if (c?.bid != null && c.bid > 0) return c.bid;
-  if (c?.bid != null && c?.ask != null && c.bid >= 0 && c.ask > 0) {
-    // Если bid=0 и ask>0 — реальной ликвидности нет, не продать
-    return null;
-  }
-  // marketPremium как последний резерв (Last Close / Mid / Ask) — менее точно
-  if (c?.marketPremium != null && c.marketPremium > 0) return c.marketPremium;
+  if (!c) return null;
+  const bid = c.bid;
+  const ask = c.ask;
+  if (bid != null && bid > 0 && ask != null && ask > 0) return (bid + ask) / 2;
+  if (bid != null && bid > 0) return bid;
   return null;
 }
 
-// Цена при покупке защитного крыла — ask (что заплатим).
+// Цена покупки защитного крыла — ask (что точно заплатим). Без fallback'а:
+// если ask нет — крыло не купить, спред бракуем.
 function getBuyPrice(c) {
+  if (!c) return null;
   if (c?.ask != null && c.ask > 0) return c.ask;
-  if (c?.marketPremium != null && c.marketPremium > 0) return c.marketPremium;
   return null;
+}
+
+// Ликвидность: страйк реально торгуется, если есть жирная заявка на покупку
+// (bid > 0) и накопленный открытый интерес ≥ 50 контрактов. Иначе котировки
+// неактуальны и реальные сделки невозможны.
+function isLiquid(c) {
+  if (!c) return false;
+  if (c.bid == null || c.bid <= 0) return false;
+  if ((c.openInterest ?? 0) < 50) return false;
+  return true;
+}
+
+// Дельта-зона для short-ноги: 0.10–0.45 — практическая зона продажи премии.
+// Ниже 0.10 — премия копеечная, не оправдывает риск. Выше 0.45 — слишком
+// близко к ATM, винрейт меньше 55% и риск выноса значительный.
+const SHORT_DELTA_MIN = 0.10;
+const SHORT_DELTA_MAX = 0.45;
+
+function inShortDeltaZone(c) {
+  if (!c || c.delta == null) return false;
+  const abs = Math.abs(c.delta);
+  return abs >= SHORT_DELTA_MIN && abs <= SHORT_DELTA_MAX;
 }
 
 // Найти страйк ближайший к (shortStrike ± idealWing) в нужном направлении.
@@ -136,14 +162,16 @@ function finalize(c) {
   return { ...c, yieldPct, annualizedPct, scoreWinYield };
 }
 
-// 1) Covered Call — для каждого OTM колла.
+// 1) Covered Call — для каждого OTM колла с дельтой в зоне 0.10-0.45 и
+// ликвидностью.
 function buildCoveredCalls(contracts, spot, dte) {
   if (spot == null) return [];
   const out = [];
   for (const c of contracts) {
     if (c.type !== "call") continue;
     if (c.strike <= spot) continue;
-    if (c.delta == null) continue;
+    if (!inShortDeltaZone(c)) continue;   // delta-зона 0.10–0.45
+    if (!isLiquid(c)) continue;            // bid>0 + OI ≥ 50
     const sell = getSellPrice(c);
     if (sell == null) continue;
     const premium       = sell * 100;
@@ -168,14 +196,16 @@ function buildCoveredCalls(contracts, spot, dte) {
   return out;
 }
 
-// 2) Cash-Secured Put — для каждого OTM пута.
+// 2) Cash-Secured Put — для каждого OTM пута с дельтой в зоне 0.10-0.45 и
+// ликвидностью.
 function buildCSPs(contracts, spot, dte) {
   if (spot == null) return [];
   const out = [];
   for (const c of contracts) {
     if (c.type !== "put") continue;
     if (c.strike >= spot) continue;
-    if (c.delta == null) continue;
+    if (!inShortDeltaZone(c)) continue;   // delta-зона 0.10–0.45
+    if (!isLiquid(c)) continue;            // bid>0 + OI ≥ 50
     const sell = getSellPrice(c);
     if (sell == null) continue;
     const premium       = sell * 100;
@@ -198,7 +228,8 @@ function buildCSPs(contracts, spot, dte) {
   return out;
 }
 
-// 3) Bull Put — продать OTM пут, купить пут ниже (бычий/нейтральный).
+// 3) Bull Put — продать OTM пут (delta-зона + ликвидность),
+// купить пут ниже (тоже ликвидный).
 function buildBullPuts(contracts, spot, dte, wing) {
   if (spot == null) return [];
   const puts = new Map();
@@ -208,13 +239,16 @@ function buildBullPuts(contracts, spot, dte, wing) {
   for (const spStrike of strikes) {
     if (spStrike >= spot) continue;
     const SP = puts.get(spStrike);
-    if (!SP || SP.delta == null) continue;
+    if (!SP) continue;
+    if (!inShortDeltaZone(SP)) continue;   // short в зоне 0.10–0.45
+    if (!isLiquid(SP)) continue;            // short ликвидный
     const sellSP = getSellPrice(SP);
     if (sellSP == null) continue;
     const lpStrike = pickWingStrike(strikes, spStrike, "below", wing);
     if (lpStrike == null) continue;
     const LP = puts.get(lpStrike);
     if (!LP) continue;
+    if (!isLiquid(LP)) continue;            // long тоже должен быть ликвидным
     const buyLP = getBuyPrice(LP);
     if (buyLP == null) continue;
     const credit = sellSP - buyLP;
@@ -242,7 +276,8 @@ function buildBullPuts(contracts, spot, dte, wing) {
   return out;
 }
 
-// 4) Bear Call — продать OTM колл, купить колл выше (медвежий/нейтральный).
+// 4) Bear Call — продать OTM колл (delta-зона + ликвидность),
+// купить колл выше (тоже ликвидный).
 function buildBearCalls(contracts, spot, dte, wing) {
   if (spot == null) return [];
   const calls = new Map();
@@ -252,13 +287,16 @@ function buildBearCalls(contracts, spot, dte, wing) {
   for (const scStrike of strikes) {
     if (scStrike <= spot) continue;
     const SC = calls.get(scStrike);
-    if (!SC || SC.delta == null) continue;
+    if (!SC) continue;
+    if (!inShortDeltaZone(SC)) continue;   // short в зоне 0.10–0.45
+    if (!isLiquid(SC)) continue;            // short ликвидный
     const sellSC = getSellPrice(SC);
     if (sellSC == null) continue;
     const lcStrike = pickWingStrike(strikes, scStrike, "above", wing);
     if (lcStrike == null) continue;
     const LC = calls.get(lcStrike);
     if (!LC) continue;
+    if (!isLiquid(LC)) continue;            // long тоже должен быть ликвидным
     const buyLC = getBuyPrice(LC);
     if (buyLC == null) continue;
     const credit = sellSC - buyLC;
@@ -302,7 +340,9 @@ function buildIronCondors(contracts, spot, dte, wing) {
   for (const spStrike of putStrikes) {
     if (spStrike >= spot) continue;
     const SP = puts.get(spStrike);
-    if (!SP || SP.delta == null) continue;
+    if (!SP) continue;
+    if (!inShortDeltaZone(SP)) continue;   // short put в зоне 0.10–0.45
+    if (!isLiquid(SP)) continue;
     const sellSP = getSellPrice(SP);
     if (sellSP == null) continue;
 
@@ -310,16 +350,20 @@ function buildIronCondors(contracts, spot, dte, wing) {
     if (lpStrike == null) continue;
     const LP = puts.get(lpStrike);
     if (!LP) continue;
+    if (!isLiquid(LP)) continue;            // long put тоже ликвидный
     const buyLP = getBuyPrice(LP);
     if (buyLP == null) continue;
 
     // Подбираем SC с |delta| ближайшим к |delta SP| — сбалансированный кондор.
+    // SC тоже должен быть в delta-зоне и ликвидным.
     const targetDelta = Math.abs(SP.delta);
     let SC = null, scStrike = null, bestDeltaDist = Infinity;
     for (const s of callStrikes) {
       if (s <= spot) continue;
       const c = calls.get(s);
-      if (!c || c.delta == null) continue;
+      if (!c) continue;
+      if (!inShortDeltaZone(c)) continue;
+      if (!isLiquid(c)) continue;
       const d = Math.abs(Math.abs(c.delta) - targetDelta);
       if (d < bestDeltaDist) { bestDeltaDist = d; SC = c; scStrike = s; }
     }
@@ -331,6 +375,7 @@ function buildIronCondors(contracts, spot, dte, wing) {
     if (lcStrike == null) continue;
     const LC = calls.get(lcStrike);
     if (!LC) continue;
+    if (!isLiquid(LC)) continue;            // long call тоже ликвидный
     const buyLC = getBuyPrice(LC);
     if (buyLC == null) continue;
 
@@ -551,16 +596,10 @@ export default function StrategyEngine({ contracts, spot, expiry, ivAvgPct, tick
     }
   }, [contracts, spot, dte, wing, currentStrategy]);
 
-  // Фильтр по винрейту ≥ threshold (стартуем с 50%, поднимаем пока > 15 строк).
-  const filtered = useMemo(() => {
-    let threshold = 50;
-    let result = allCandidates.filter(c => c.winratePct >= threshold);
-    while (result.length > 15 && threshold < 95) {
-      threshold += 5;
-      result = allCandidates.filter(c => c.winratePct >= threshold);
-    }
-    return { rows: result, threshold };
-  }, [allCandidates]);
+  // Бывший фильтр по винрейту (с авто-поднятием порога) убран — дельта-зона
+  // 0.10–0.45 + ликвидность уже отсекают весь мусор и оставляют 5-30 строк
+  // на ликвидном тикере. Порог винрейта прятал практичные страйки.
+  const filtered = useMemo(() => ({ rows: allCandidates }), [allCandidates]);
 
   // Сортировка.
   const sorted = useMemo(() => {
@@ -642,11 +681,9 @@ export default function StrategyEngine({ contracts, spot, expiry, ivAvgPct, tick
         >
           По премии $
         </button>
-        {filtered.threshold > 50 && (
-          <div style={S.thresholdNote}>
-            Порог винрейта поднят до {filtered.threshold}% — было больше 15 строк
-          </div>
-        )}
+        <div style={S.thresholdNote}>
+          Дельта-зона 0.10–0.45 · ликвидность OI ≥ 50 · цена Mid(bid,ask)
+        </div>
         <div style={S.thresholdNote}>
           {sorted.length} {sorted.length === 1 ? "вариант" : sorted.length < 5 ? "варианта" : "вариантов"}
         </div>
@@ -655,8 +692,11 @@ export default function StrategyEngine({ contracts, spot, expiry, ivAvgPct, tick
       {/* Таблица страйков */}
       {sorted.length === 0 ? (
         <div style={S.emptyBox}>
-          Нет вариантов с винрейтом ≥ 50% для выбранной стратегии и даты.
-          {ivAvgPct != null && ivAvgPct < 10 && " Возможно, IV слишком низкая — премии не оправдывают риск."}
+          Нет ликвидных страйков в дельта-зоне 0.10–0.45 для выбранной стратегии.
+          Возможные причины: тикер маловолатильный (премии копеечные за пределами ATM),
+          выбрана очень дальняя/ближняя дата с тонкой ликвидностью, или
+          выбран спред-вариант (Vertical / Iron Condor), где не хватает страйков
+          для крыльев нужной ширины.
         </div>
       ) : (
         <div style={S.tableWrap}>
