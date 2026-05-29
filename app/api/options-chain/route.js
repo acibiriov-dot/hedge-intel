@@ -167,6 +167,21 @@ function parseFvNum(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+// Finviz IV возвращается в двух форматах в зависимости от endpoint:
+//   · Полная цепочка (без e=): "23.45%" с явным процентным знаком.
+//   · e= mode: голое число "1.5089" — уже decimal (= 150.89%).
+// Probe verified: AAPL 110-put на 2026-06-26 → Finviz e= IV "1.5089",
+// Massive iv: 1.5265 (одна и та же decimal-шкала).
+// Если "%" в строке → делим на 100, иначе считаем уже decimal.
+function parseFvIv(v) {
+  if (v == null || v === "") return null;
+  const s = String(v);
+  const isPercent = s.includes("%");
+  const n = parseFloat(s.replace("%", "").replace(/,/g, ""));
+  if (!Number.isFinite(n)) return null;
+  return isPercent ? n / 100 : n;
+}
+
 // "M/D/YYYY" → "YYYY-MM-DD" | null
 function parseFvDateToIso(s) {
   if (!s) return null;
@@ -224,9 +239,9 @@ function buildContractFromFinviz(fv, massiveMaybe, expiryHint = null) {
   else if (ask != null && ask > 0) { premium = ask; premiumSource = "ask"; }
   else if (bid != null && bid > 0) { premium = bid; premiumSource = "bid"; }
 
-  // Finviz IV приходит в percent, Massive в decimal → нормализуем к decimal.
-  const fvIvPct = parseFvNum(fv.IV);
-  const fvIvDec = fvIvPct != null ? fvIvPct / 100 : null;
+  // IV нормализуем к decimal через parseFvIv — она различает "23.45%" и
+  // голое decimal "1.5089" (e= mode формат).
+  const fvIvDec = parseFvIv(fv.IV);
   const fvDelta = parseFvNum(fv.Delta);
   const fvGamma = parseFvNum(fv.Gamma);
   const fvTheta = parseFvNum(fv.Theta);
