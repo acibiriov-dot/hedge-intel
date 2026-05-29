@@ -1212,6 +1212,7 @@ ${brief}`;
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <a href="/dashboard" style={{ background: "transparent", border: "1px solid #4caf50", color: "#4caf50", padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 700, textDecoration: "none", letterSpacing: 0.3 }}>🎛 Dashboard</a>
+          <a href="/volatility" style={{ background: "transparent", border: "1px solid #10b981", color: "#10b981", padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 700, textDecoration: "none", letterSpacing: 0.5, fontFamily: "ui-monospace, monospace" }}>σ VOL LAB</a>
           <a href="/briefing" style={{ background: "transparent", border: "1px solid #10b981", color: "#10b981", padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 700, textDecoration: "none", letterSpacing: 0.5, fontFamily: "ui-monospace, monospace" }}>☼ BRIEFING</a>
           <a href="/strategies" style={{ background: "transparent", border: "1px solid #10b981", color: "#10b981", padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 700, textDecoration: "none", letterSpacing: 0.5, fontFamily: "ui-monospace, monospace" }}>◇ STRATEGIES</a>
           <a href="/covered-call" style={{ background: "transparent", border: "1px solid #10b981", color: "#10b981", padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 700, textDecoration: "none", letterSpacing: 0.5, fontFamily: "ui-monospace, monospace" }}>◆ DECISION ENGINE</a>

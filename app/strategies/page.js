@@ -520,6 +520,7 @@ export default function StrategyLibrary() {
     <div style={S.page}>
       <div style={S.topBar}>
         <a href="/briefing"       style={S.navLink}>Briefing</a>
+        <a href="/volatility"     style={S.navLink}>Vol Lab</a>
         <a href="/dashboard"      style={S.navLink}>Dashboard</a>
         <a href="/covered-call"   style={S.navLink}>Decision Engine</a>
         <a href="/smart-strategy" style={S.navLink}>Smart Strategy</a>
