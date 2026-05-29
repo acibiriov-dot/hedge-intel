@@ -45,6 +45,113 @@ async function fetchFmpPrice(ticker) {
   }
 }
 
+// ─── Finviz Elite options chain — для реальной цены опциона ──────────────
+// Massive Starter план не отдаёт bid/ask/last → break_even_price = null.
+// Finviz Elite экспортирует CSV с реальными котировками через
+// /export/options?t={ticker}&ty=oc&auth={FINVIZ_KEY}.
+//
+// Реальные колонки (verified 2026-05 probe на AAPL):
+//   Contract Name, Last Trade, Expiry (M/D/YYYY), Strike, Last Close,
+//   Bid, Ask, Change $, Change %, Volume, Open Int., Type (lowercase
+//   "call"/"put"), IV, Delta, Gamma, Theta, Vega, Rho
+//
+// Премия (priority order):
+//   1. Last Close — последняя цена закрытия (всегда есть)
+//   2. Mid (Bid+Ask)/2 — если оба котировки активны
+//   3. Ask — если Bid отсутствует
+//   4. Bid — если Ask отсутствует
+
+function parseCsvLine(line) {
+  const result = [];
+  let cur = "", inQ = false;
+  for (const ch of line) {
+    if (ch === '"') { inQ = !inQ; }
+    else if (ch === "," && !inQ) { result.push(cur); cur = ""; }
+    else { cur += ch; }
+  }
+  result.push(cur);
+  return result;
+}
+
+async function fetchFinvizOptionsChain(ticker) {
+  const token = (process.env.FINVIZ_KEY || "").trim();
+  if (!token) return { rows: [], error: "FINVIZ_KEY not set", status: 0 };
+
+  const url = `https://elite.finviz.com/export/options?t=${encodeURIComponent(ticker)}&ty=oc&auth=${encodeURIComponent(token)}`;
+  try {
+    const r = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/csv,*/*",
+      },
+      redirect: "follow",
+      cache: "no-store",
+    });
+    if (!r.ok) {
+      const errText = await r.text().catch(() => "");
+      console.error("[options-chain.finviz]", r.status, errText.slice(0, 300));
+      return { rows: [], error: `Finviz ${r.status}: ${errText.slice(0, 200)}`, status: r.status };
+    }
+    const text = (await r.text()).trim();
+    if (!text || text.startsWith("<!") || text.startsWith("<html")) {
+      console.error("[options-chain.finviz] received HTML — auth or ticker issue");
+      return { rows: [], error: "Finviz returned HTML (auth / invalid ticker)", status: 200 };
+    }
+
+    const lines = text.split(/\r?\n/).filter(l => l.length > 0);
+    if (lines.length < 2) return { rows: [], error: "Empty CSV from Finviz", status: 200 };
+
+    const columns = parseCsvLine(lines[0]).map(c => c.trim());
+    const rows = [];
+    for (let i = 1; i < lines.length; i++) {
+      const cells = parseCsvLine(lines[i]);
+      const row = {};
+      columns.forEach((c, idx) => { row[c] = (cells[idx] ?? "").trim(); });
+      rows.push(row);
+    }
+    return { rows, columns, status: 200 };
+  } catch (e) {
+    console.error("[options-chain.finviz] exception:", e?.message);
+    return { rows: [], error: "Finviz exception: " + (e?.message || "unknown"), status: 0 };
+  }
+}
+
+// Build lookup map: "strike|type|YYYY-MM-DD" → {premium, source}.
+// Priority: Last Close → Mid(Bid,Ask) → Ask → Bid.
+function buildFinvizPremiumMap(rows) {
+  const map = new Map();
+  for (const r of rows) {
+    const type = (r.Type || "").trim().toLowerCase();
+    const strike = parseFloat(String(r.Strike || "").replace(/,/g, ""));
+    const expiryRaw = (r.Expiry || "").trim();
+    if (!type || !Number.isFinite(strike) || !expiryRaw) continue;
+
+    // M/D/YYYY → YYYY-MM-DD (matches Massive's expiration_date format)
+    const m = expiryRaw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (!m) continue;
+    const expIso = `${m[3]}-${String(m[1]).padStart(2, "0")}-${String(m[2]).padStart(2, "0")}`;
+
+    const lastClose = parseFloat(r["Last Close"] || "");
+    const bid = parseFloat(r.Bid || "");
+    const ask = parseFloat(r.Ask || "");
+
+    let premium = null, source = null;
+    if (Number.isFinite(lastClose) && lastClose > 0) {
+      premium = lastClose; source = "last_close";
+    } else if (Number.isFinite(bid) && Number.isFinite(ask) && bid > 0 && ask > 0) {
+      premium = (bid + ask) / 2; source = "mid";
+    } else if (Number.isFinite(ask) && ask > 0) {
+      premium = ask; source = "ask";
+    } else if (Number.isFinite(bid) && bid > 0) {
+      premium = bid; source = "bid";
+    }
+    if (premium == null) continue;
+
+    map.set(`${strike}|${type}|${expIso}`, { premium, source });
+  }
+  return map;
+}
+
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
   const tickerRaw = (searchParams.get("ticker") || "").trim().toUpperCase();
@@ -125,16 +232,34 @@ export async function GET(request) {
 
     // Normalize контракты в плоскую форму. Underlying price берём из первого
     // контракта (он одинаков для всех — это spot price базового актива).
-    const contracts = data.results.map(normalizeContract).filter(Boolean);
+    const rawContracts = data.results.map(normalizeContract).filter(Boolean);
     const massivePrice = data.results[0]?.underlying_asset?.price ?? null;
 
-    // FMP — defensive fallback для underlying. Starter Massive план иногда
-    // не отдаёт underlying_asset.price → нужен для Black-Scholes на клиенте.
-    // Делаем параллельно с уже завершённым Massive (но всё равно exec — он
-    // быстрый, ~150ms). Без await блокировки бы не было, но fmpResult'у
-    // нужен await перед сериализацией.
-    const fmp = await fetchFmpPrice(tickerRaw);
+    // Параллельно тянем (а) FMP для underlying-price fallback'а и
+    // (б) Finviz Elite options chain для реальных премий → breakeven.
+    // Promise.all чтобы не складывать latency'ы последовательно.
+    const [fmp, finviz] = await Promise.all([
+      fetchFmpPrice(tickerRaw),
+      fetchFinvizOptionsChain(tickerRaw),
+    ]);
     const underlyingPrice = fmp.price ?? massivePrice;
+    const premiumMap = buildFinvizPremiumMap(finviz.rows);
+
+    // Merge Finviz premium → marketPremium / premiumSource. Если matched
+    // (strike + type + expiry) — клиент посчитает BE = strike ± premium.
+    // Если нет matched — поле null, UI рендерит "—" (BS НЕ используется,
+    // user explicit: реальные данные only).
+    let premiumMatched = 0;
+    const contracts = rawContracts.map(c => {
+      const key = `${c.strike}|${c.type}|${c.expiration}`;
+      const lookup = premiumMap.get(key);
+      if (lookup) premiumMatched++;
+      return {
+        ...c,
+        marketPremium: lookup?.premium ?? null,
+        premiumSource: lookup?.source ?? null,
+      };
+    });
 
     return Response.json({
       ok: true,
@@ -146,6 +271,14 @@ export async function GET(request) {
         fmp: fmp.price,
         used: underlyingPrice === fmp.price && fmp.price != null ? "fmp" : "massive",
         fmp_status: fmp.source,
+      },
+      finvizPremiums: {
+        rowsFetched: finviz.rows?.length || 0,
+        mapEntries: premiumMap.size,
+        contractsMatched: premiumMatched,
+        contractsTotal: contracts.length,
+        error: finviz.error || null,
+        status: finviz.status,
       },
       contractCount: contracts.length,
       contracts,

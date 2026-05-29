@@ -135,15 +135,15 @@ export default function VolatilityLab() {
             name="ATM Greeks"
             hint={derived.atmStrike != null ? `Strike $${derived.atmStrike.toFixed(2)}` : ""}
           />
-          <AtmGreeks atmCall={derived.atmCall} atmPut={derived.atmPut} spot={data.underlyingPrice} />
+          <AtmGreeks atmCall={derived.atmCall} atmPut={derived.atmPut} />
 
           {/* C. Chain table */}
           <SectionTitle
             num="03"
             name="Options Chain"
-            hint={`${derived.chainRows.length} rows · ${derived.expiry} · BE via Black-Scholes`}
+            hint={`${derived.chainRows.length} rows · ${derived.expiry} · BE via Finviz premium`}
           />
-          <ChainTable rows={derived.chainRows} atmStrike={derived.atmStrike} spot={data.underlyingPrice} />
+          <ChainTable rows={derived.chainRows} atmStrike={derived.atmStrike} />
 
           {/* D. Recommendation */}
           <SectionTitle num="04" name="Strategy Recommendation" />
@@ -224,71 +224,23 @@ function deriveAnalysis(data) {
 }
 
 // ============================================================================
-// Black-Scholes (теоретическая цена опциона)
+// Breakeven из реальной премии (Finviz Elite)
 // ============================================================================
-// Massive Starter план НЕ отдаёт bid/ask / mark price → break_even_price из
-// контракта обычно null. Считаем теоретическую цену сами через BS, потом
-// breakeven = strike ± theoretical (call/put соответственно).
+// /api/options-chain параллельно тянет Finviz Elite options chain и
+// присоединяет реальную премию опциона к каждому контракту:
+//   contract.marketPremium  — число $ (Last Close / Mid / Bid / Ask)
+//   contract.premiumSource  — из какого поля Finviz взялась цена
 //
-// Стандартная закрытая формула. CDF нормального распределения через
-// erf-аппроксимацию Abramowitz & Stegun 7.1.26 (max error ≈ 1.5e-7,
-// заведомо достаточно для отображения брейкивена с двумя знаками).
+// BE = strike ± premium. Если premium отсутствует (Finviz не вернул
+// matching row или контракт illiquid с пустыми котировками) — null,
+// рендерим "—". Никаких theoretical price'ов: только real market data.
 
-const RISK_FREE = 0.05;  // ~ставка US Treasury 10Y, обычная конвенция для BS
-
-function erf(x) {
-  const a1 =  0.254829592;
-  const a2 = -0.284496736;
-  const a3 =  1.421413741;
-  const a4 = -1.453152027;
-  const a5 =  1.061405429;
-  const p  =  0.3275911;
-  const sign = x < 0 ? -1 : 1;
-  const ax = Math.abs(x);
-  const t = 1.0 / (1.0 + p * ax);
-  const y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-ax * ax);
-  return sign * y;
-}
-
-function normalCdf(x) {
-  return 0.5 * (1 + erf(x / Math.SQRT2));
-}
-
-function blackScholesPrice(S, K, T, r, sigma, type) {
-  // Guards: BS не определён для T<=0, sigma<=0, K<=0, S<=0.
-  if (!(T > 0) || !(sigma > 0) || !(K > 0) || !(S > 0)) return null;
-  const sqrtT = Math.sqrt(T);
-  const d1 = (Math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * sqrtT);
-  const d2 = d1 - sigma * sqrtT;
-  if (type === "call") {
-    return S * normalCdf(d1) - K * Math.exp(-r * T) * normalCdf(d2);
-  }
-  if (type === "put") {
-    return K * Math.exp(-r * T) * normalCdf(-d2) - S * normalCdf(-d1);
-  }
-  return null;
-}
-
-// Compute breakeven for a single contract using BS theoretical price.
-// Returns null if any input is missing — caller renders "—".
-function computeBreakeven(contract, spot) {
-  if (!contract || !spot) return null;
-  if (contract.iv == null || contract.iv <= 0) return null;
-  if (!Number.isFinite(contract.strike) || !contract.expiration) return null;
-
-  // Days to expiration (whole days, floored at 0).
-  const today = new Date();
-  const exp = new Date(contract.expiration + "T00:00:00Z");
-  const ms = exp - today;
-  const days = Math.max(0, Math.round(ms / 86400000));
-  const T = days / 365;
-  if (T <= 0) return null;
-
-  const theoretical = blackScholesPrice(spot, contract.strike, T, RISK_FREE, contract.iv, contract.type);
-  if (theoretical == null || theoretical <= 0) return null;
-
-  if (contract.type === "call") return contract.strike + theoretical;
-  if (contract.type === "put")  return contract.strike - theoretical;
+function computeBreakeven(contract) {
+  if (!contract) return null;
+  if (contract.marketPremium == null) return null;
+  if (!Number.isFinite(contract.strike)) return null;
+  if (contract.type === "call") return contract.strike + contract.marketPremium;
+  if (contract.type === "put")  return contract.strike - contract.marketPremium;
   return null;
 }
 
@@ -367,9 +319,9 @@ function GreekRow({ label, value, formatter = (v) => v?.toFixed?.(3) ?? "—" })
   );
 }
 
-function AtmGreeks({ atmCall, atmPut, spot }) {
-  const beCall = computeBreakeven(atmCall, spot);
-  const beP    = computeBreakeven(atmPut,  spot);
+function AtmGreeks({ atmCall, atmPut }) {
+  const beCall = computeBreakeven(atmCall);
+  const beP    = computeBreakeven(atmPut);
   return (
     <div style={S.greeksGrid}>
       <div style={S.greeksCol}>
@@ -406,7 +358,7 @@ function AtmGreeks({ atmCall, atmPut, spot }) {
   );
 }
 
-function ChainTable({ rows, atmStrike, spot }) {
+function ChainTable({ rows, atmStrike }) {
   if (!rows.length) return <div style={S.empty}>Цепочка пуста.</div>;
   return (
     <div style={S.tableWrap}>
@@ -419,6 +371,7 @@ function ChainTable({ rows, atmStrike, spot }) {
             <th style={S.thNum}>Delta</th>
             <th style={S.thNum}>Theta</th>
             <th style={S.thNum}>OI</th>
+            <th style={S.thNum}>Premium</th>
             <th style={S.thNum}>Breakeven</th>
           </tr>
         </thead>
@@ -427,9 +380,9 @@ function ChainTable({ rows, atmStrike, spot }) {
             const isAtm = r.strike === atmStrike;
             const rowStyle = isAtm ? S.trAtm : (i % 2 ? S.trAlt : S.tr);
             const typeColor = r.type === "call" ? "#10b981" : "#ef4444";
-            // BE via Black-Scholes (Massive Starter не отдаёт break_even_price).
-            // null если IV/spot/expiry недоступны — рендерим "—".
-            const be = computeBreakeven(r, spot);
+            // BE = strike ± marketPremium (Finviz). Null если Finviz не дал
+            // matching row → колонка "—".
+            const be = computeBreakeven(r);
             return (
               <tr key={(r.contractTicker || i) + r.type} style={rowStyle}>
                 <td style={S.tdNum}>${r.strike?.toFixed(2)}</td>
@@ -440,6 +393,9 @@ function ChainTable({ rows, atmStrike, spot }) {
                 <td style={S.tdNum}>{r.delta != null ? r.delta.toFixed(3) : "—"}</td>
                 <td style={S.tdNum}>{r.theta != null ? r.theta.toFixed(3) : "—"}</td>
                 <td style={S.tdNum}>{r.openInterest ?? "—"}</td>
+                <td style={S.tdNum} title={r.premiumSource ? `source: ${r.premiumSource}` : ""}>
+                  {r.marketPremium != null ? "$" + r.marketPremium.toFixed(2) : "—"}
+                </td>
                 <td style={S.tdNum}>{be != null ? "$" + be.toFixed(2) : "—"}</td>
               </tr>
             );
