@@ -203,12 +203,15 @@ function num(v) {
 }
 
 // Build unified contract from Finviz row + optional Massive fallback.
-// Greeks priority: Finviz (primary, per probe) → Massive (fallback for ниши
-// где Finviz row есть но греки пустые).
-function buildContractFromFinviz(fv, massiveMaybe) {
+// Greeks priority: Finviz (primary, per probe) → Massive (fallback для ниш
+// где Finviz row есть, но греки пустые).
+//
+// expiryHint: e= mode у Finviz НЕ возвращает столбец "Expiry" (он избыточен —
+// дата задана параметром запроса). Если строка без "Expiry", используем hint.
+function buildContractFromFinviz(fv, massiveMaybe, expiryHint = null) {
   const type = (fv.Type || "").trim().toLowerCase();
   const strike = parseFvNum(fv.Strike);
-  const expIso = parseFvDateToIso(fv.Expiry);
+  const expIso = parseFvDateToIso(fv.Expiry) || expiryHint || null;
   if (!type || !Number.isFinite(strike) || !expIso) return null;
 
   // Premium priority: Last Close → Mid(Bid,Ask) → Ask → Bid.
@@ -279,7 +282,7 @@ function todayIsoServer() {
 // Common: build contracts list from Finviz e= rows + Massive fallback map
 // ============================================================================
 
-function assembleContracts(finvizRows, massiveByKey) {
+function assembleContracts(finvizRows, massiveByKey, expiryHint = null) {
   let contractsFromFinviz = 0, contractsMassiveOnly = 0;
   const contracts = [];
   const seenKeys = new Set();
@@ -287,10 +290,11 @@ function assembleContracts(finvizRows, massiveByKey) {
   for (const fv of finvizRows) {
     const type = (fv.Type || "").trim().toLowerCase();
     const strike = parseFvNum(fv.Strike);
-    const expIso = parseFvDateToIso(fv.Expiry);
+    // e= mode у Finviz не возвращает "Expiry" → берём hint.
+    const expIso = parseFvDateToIso(fv.Expiry) || expiryHint || null;
     if (!type || !Number.isFinite(strike) || !expIso) continue;
     const key = `${strike}|${type}|${expIso}`;
-    const c = buildContractFromFinviz(fv, massiveByKey.get(key));
+    const c = buildContractFromFinviz(fv, massiveByKey.get(key), expiryHint);
     if (!c) continue;
     contracts.push(c);
     seenKeys.add(key);
@@ -340,7 +344,7 @@ async function handlePerExpiry({ apiKey, ticker, expiry }) {
   }
 
   const { contracts, contractsFromFinviz, contractsMassiveOnly } =
-    assembleContracts(finviz.rows, massiveByKey);
+    assembleContracts(finviz.rows, massiveByKey, expiry);
 
   return Response.json({
     ok: true,
@@ -359,8 +363,6 @@ async function handlePerExpiry({ apiKey, ticker, expiry }) {
       finvizExpiryRows: finviz.rows?.length || 0,
       finvizError: finviz.error || null,
       finvizStatus: finviz.status,
-      finvizColumns: finviz.columns || null,
-      finvizSampleRow: finviz.rows?.[0] || null,
       massiveExpiryContracts: massiveContracts.length,
       massiveError: massive.ok ? null : massive.error,
       contractsFromFinviz,
@@ -448,7 +450,7 @@ async function handleInitial({ apiKey, ticker }) {
   }
 
   const { contracts, contractsFromFinviz, contractsMassiveOnly } =
-    assembleContracts(finvizExpiry.rows, massiveByKey);
+    assembleContracts(finvizExpiry.rows, massiveByKey, defaultExpiry);
 
   return Response.json({
     ok: true,
