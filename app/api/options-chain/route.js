@@ -81,7 +81,8 @@ async function fetchMassiveSnapshot(apiKey, ticker, extraQuery = "") {
   return { ok: false, status: 502, error: "All Massive endpoints unavailable", tried };
 }
 
-// FMP — best-effort underlying price.
+// FMP — best-effort underlying price (FMP_API_KEY на prod возвращает 401,
+// оставлен как последний fallback на случай восстановления).
 async function fetchFmpPrice(ticker) {
   const key = (process.env.FMP_API_KEY || "").trim();
   if (!key) return { price: null, source: "fmp_unconfigured" };
@@ -94,6 +95,52 @@ async function fetchFmpPrice(ticker) {
     return { price: typeof price === "number" && Number.isFinite(price) ? price : null, source: "fmp" };
   } catch {
     return { price: null, source: "fmp_error" };
+  }
+}
+
+// Finviz Elite quote_export → daily OHLCV CSV, последняя строка = последняя
+// торговая сессия. Берём Close. Primary источник underlying price (FINVIZ_KEY
+// работает на prod, FMP_API_KEY мёртв, Massive Starter не отдаёт underlying).
+async function fetchFinvizQuote(ticker) {
+  const token = (process.env.FINVIZ_KEY || "").trim();
+  if (!token) return { price: null, source: "finviz_unconfigured" };
+
+  const url = `https://elite.finviz.com/quote_export?t=${encodeURIComponent(ticker)}&p=d&auth=${encodeURIComponent(token)}`;
+  try {
+    const r = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/csv,*/*",
+      },
+      redirect: "follow",
+      cache: "no-store",
+    });
+    if (!r.ok) {
+      console.error("[options-chain.finviz_quote]", r.status);
+      return { price: null, source: `finviz_${r.status}` };
+    }
+    const text = (await r.text()).trim();
+    if (!text || text.startsWith("<!") || text.startsWith("<html")) {
+      console.error("[options-chain.finviz_quote] received HTML — auth or ticker issue");
+      return { price: null, source: "finviz_html" };
+    }
+    const lines = text.split(/\r?\n/).filter(l => l.length > 0);
+    if (lines.length < 2) return { price: null, source: "finviz_empty" };
+
+    const header = parseCsvLine(lines[0]).map(c => c.trim());
+    const closeIdx = header.findIndex(h => h.toLowerCase() === "close");
+    if (closeIdx === -1) return { price: null, source: "finviz_no_close_col" };
+
+    // Берём последнюю строку — самую свежую торговую сессию.
+    const lastRow = parseCsvLine(lines[lines.length - 1]);
+    const closeRaw = (lastRow[closeIdx] ?? "").trim().replace(/,/g, "");
+    const close = parseFloat(closeRaw);
+    if (!Number.isFinite(close) || close <= 0) return { price: null, source: "finviz_unparseable" };
+
+    return { price: close, source: "finviz" };
+  } catch (e) {
+    console.error("[options-chain.finviz_quote] exception:", e?.message);
+    return { price: null, source: "finviz_error" };
   }
 }
 
@@ -338,10 +385,11 @@ function assembleContracts(finvizRows, massiveByKey, expiryHint = null) {
 // ============================================================================
 
 async function handlePerExpiry({ apiKey, ticker, expiry }) {
-  // 3 параллельных запроса для одной выбранной даты — все нужны.
-  const [finviz, massive, fmp] = await Promise.all([
+  // 4 параллельных запроса — Finviz quote primary для underlying price.
+  const [finviz, massive, finvizQuote, fmp] = await Promise.all([
     fetchFinvizOptionsChain(ticker, expiry),
     fetchMassiveSnapshot(apiKey, ticker, `expiration_date=${encodeURIComponent(expiry)}`),
+    fetchFinvizQuote(ticker),
     fetchFmpPrice(ticker),
   ]);
 
@@ -351,7 +399,8 @@ async function handlePerExpiry({ apiKey, ticker, expiry }) {
   const massivePrice = massive.ok
     ? (massive.data.results[0]?.underlying_asset?.price ?? null)
     : null;
-  const underlyingPrice = fmp.price ?? massivePrice;
+  // Priority: Finviz quote → Massive underlying → FMP (FMP мёртв на prod).
+  const underlyingPrice = finvizQuote.price ?? massivePrice ?? fmp.price;
 
   const massiveByKey = new Map();
   for (const c of massiveContracts) {
@@ -367,9 +416,14 @@ async function handlePerExpiry({ apiKey, ticker, expiry }) {
     expiry,
     underlyingPrice,
     priceSources: {
+      finviz: finvizQuote.price,
       massive: massivePrice,
       fmp: fmp.price,
-      used: underlyingPrice === fmp.price && fmp.price != null ? "fmp" : "massive",
+      used: finvizQuote.price != null ? "finviz"
+          : massivePrice      != null ? "massive"
+          : fmp.price         != null ? "fmp"
+          : null,
+      finviz_status: finvizQuote.source,
       fmp_status: fmp.source,
     },
     contracts,
@@ -387,10 +441,11 @@ async function handlePerExpiry({ apiKey, ticker, expiry }) {
 }
 
 async function handleInitial({ apiKey, ticker }) {
-  // Stage A: параллельно — Massive unfiltered, Finviz full CSV, FMP.
-  const [massive, finvizFull, fmp] = await Promise.all([
+  // Stage A: параллельно — Massive unfiltered, Finviz full CSV, Finviz quote, FMP.
+  const [massive, finvizFull, finvizQuote, fmp] = await Promise.all([
     fetchMassiveSnapshot(apiKey, ticker),
     fetchFinvizOptionsChain(ticker),
+    fetchFinvizQuote(ticker),
     fetchFmpPrice(ticker),
   ]);
 
@@ -414,7 +469,8 @@ async function handleInitial({ apiKey, ticker }) {
   const massivePrice = massive.ok
     ? (massive.data.results[0]?.underlying_asset?.price ?? null)
     : null;
-  const underlyingPrice = fmp.price ?? massivePrice;
+  // Priority: Finviz quote → Massive underlying → FMP (FMP мёртв на prod).
+  const underlyingPrice = finvizQuote.price ?? massivePrice ?? fmp.price;
 
   // Build expirations summary. Primary source — Finviz full CSV (полнее),
   // fallback — Massive unfiltered.
@@ -472,9 +528,14 @@ async function handleInitial({ apiKey, ticker }) {
     ticker,
     underlyingPrice,
     priceSources: {
+      finviz: finvizQuote.price,
       massive: massivePrice,
       fmp: fmp.price,
-      used: underlyingPrice === fmp.price && fmp.price != null ? "fmp" : "massive",
+      used: finvizQuote.price != null ? "finviz"
+          : massivePrice      != null ? "massive"
+          : fmp.price         != null ? "fmp"
+          : null,
+      finviz_status: finvizQuote.source,
       fmp_status: fmp.source,
     },
     expirations,

@@ -168,7 +168,7 @@ export default function VolatilityLab() {
         </div>
       </div>
 
-      {/* Input row 1: ticker + analyze + spot */}
+      {/* Input row 1: ticker + analyze */}
       <div style={S.inputRow}>
         <input
           style={S.inpTicker}
@@ -181,13 +181,19 @@ export default function VolatilityLab() {
         <button style={S.btnEmerald} onClick={analyze} disabled={loading}>
           {loading ? "ANALYZING…" : "АНАЛИЗИРОВАТЬ"}
         </button>
-        {meta?.underlyingPrice != null && (
-          <div style={S.spotPill}>
-            <div style={S.spotLabel}>SPOT</div>
-            <div style={S.spotVal}>${meta.underlyingPrice.toFixed(2)}</div>
-          </div>
-        )}
       </div>
+
+      {/* Big ticker + spot price — отображается крупно сразу после загрузки.
+          Источник цены — Finviz quote_export (priority: finviz → massive → fmp). */}
+      {meta?.ticker && (
+        <div style={S.priceHeader}>
+          <div style={S.priceTicker}>{meta.ticker}</div>
+          <div style={S.priceValue}>
+            {meta.underlyingPrice != null ? `$${meta.underlyingPrice.toFixed(2)}` : "—"}
+          </div>
+          <div style={S.priceLabel}>SPOT PRICE</div>
+        </div>
+      )}
 
       {/* Input row 2: expiry selector (отображается после загрузки) */}
       {meta?.expirations?.length > 0 && (
@@ -671,6 +677,13 @@ const S = {
   spotPill: { display: "flex", flexDirection: "column", alignItems: "center", padding: "6px 18px", background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: 4, marginLeft: "auto" },
   spotLabel:{ color: C.textMute, fontSize: 9, fontWeight: 700, letterSpacing: 1.5, fontFamily: FONT_MONO },
   spotVal:  { color: "#fff", fontSize: 20, fontWeight: 700, fontFamily: FONT_MONO, fontVariantNumeric: "tabular-nums" },
+
+  // Большая шапка с ценой акции — стоит сразу после input row, отдельной
+  // полосой. Цель: цену видно с первого взгляда, не глядя в ATM таблицу.
+  priceHeader: { display: "flex", alignItems: "baseline", gap: 18, padding: "14px 18px", background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: 2, marginBottom: 16 },
+  priceTicker: { color: C.emerald, fontSize: 28, fontWeight: 700, letterSpacing: 2, fontFamily: FONT_MONO },
+  priceValue:  { color: "#fff", fontSize: 32, fontWeight: 700, fontFamily: FONT_MONO, fontVariantNumeric: "tabular-nums" },
+  priceLabel:  { color: C.textMute, fontSize: 10, fontWeight: 700, letterSpacing: 1.5, fontFamily: FONT_MONO, marginLeft: "auto" },
 
   sectionTitle: { display: "flex", alignItems: "baseline", gap: 12, margin: "32px 0 12px", borderBottom: `1px solid ${C.border}`, paddingBottom: 8 },
   sectionNum:   { color: C.emerald, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, fontFamily: FONT_MONO },
