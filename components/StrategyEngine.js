@@ -155,6 +155,8 @@ function fmtInt(n) {
 // ============================================================================
 
 // Финализация кандидата — общая для всех стратегий: добавляем yield/annualized/score.
+// winratePct — это ПРИБЛИЖЕНИЕ вероятности через дельту (1 − |delta short|).
+// НЕ точный win rate. UI обозначает это символом «≈».
 function finalize(c) {
   const yieldPct      = c.capitalAtRisk > 0 ? (c.premium / c.capitalAtRisk) * 100 : 0;
   const annualizedPct = c.dte > 0 ? yieldPct * (365 / c.dte) : 0;
@@ -190,6 +192,9 @@ function buildCoveredCalls(contracts, spot, dte) {
       premium, capitalAtRisk,
       breakevenLow: breakeven, breakevenHigh: null,
       maxProfit, maxLoss,
+      // Покрытый колл НЕ создаёт неограниченного риска — он покрыт акциями.
+      // maxLoss отражает риск ВЛАДЕНИЯ акцией (падение в 0), сниженный премией.
+      riskKind: "ownership",
       dte,
     }));
   }
@@ -222,6 +227,9 @@ function buildCSPs(contracts, spot, dte) {
       premium, capitalAtRisk,
       breakevenLow: breakeven, breakevenHigh: null,
       maxProfit: premium, maxLoss,
+      // CSP — реальное обязательство купить акцию по K. Риск ограничен
+      // обязательством: акция в 0 = убыток (K − prem) × 100 × N.
+      riskKind: "obligation",
       dte,
     }));
   }
@@ -270,6 +278,8 @@ function buildBullPuts(contracts, spot, dte, wing) {
       premium, capitalAtRisk,
       breakevenLow: spStrike - credit, breakevenHigh: null,
       maxProfit: premium, maxLoss: capitalAtRisk,
+      // Спред — риск ОГРАНИЧЕН шириной крыла минус кредит.
+      riskKind: "defined",
       dte,
     }));
   }
@@ -318,6 +328,8 @@ function buildBearCalls(contracts, spot, dte, wing) {
       premium, capitalAtRisk,
       breakevenLow: scStrike + credit, breakevenHigh: null,
       maxProfit: premium, maxLoss: capitalAtRisk,
+      // Спред — риск ОГРАНИЧЕН шириной крыла минус кредит.
+      riskKind: "defined",
       dte,
     }));
   }
@@ -409,6 +421,11 @@ function buildIronCondors(contracts, spot, dte, wing) {
       breakevenLow: spStrike - credit,
       breakevenHigh: scStrike + credit,
       maxProfit: premium, maxLoss: capitalAtRisk,
+      // Iron Condor — риск ОГРАНИЧЕН большим крылом минус кредит.
+      // Цена не может пробить оба крыла одновременно → worst case = большее крыло.
+      riskKind: "defined",
+      // Сохраняем wing-meta для прозрачности в UI.
+      wingPut, wingCall,
       dte,
     }));
   }
@@ -474,67 +491,96 @@ const STRATEGY_LABELS = {
 // Plain-language explanation
 // ============================================================================
 
+// Шаблоны объяснений строго по STRATEGY_RULES.md — что именно делать,
+// откуда деньги, в каком сценарии, чем рискуем. Никаких сокращений.
 function buildExplanation(cand, capital, spot, expiry, ticker) {
-  const contractCount = Math.max(0, Math.floor(capital / cand.capitalAtRisk));
-  const totalPremium = contractCount * cand.premium;
-  const totalCapital = contractCount * cand.capitalAtRisk;
-  const yieldS = fmtPct(cand.yieldPct);
-  const annualS = fmtPct(cand.annualizedPct);
-  const dteS = `${cand.dte} ${dayWord(cand.dte)}`;
+  const N = Math.max(0, Math.floor(capital / cand.capitalAtRisk));
+  const totalPremium = N * cand.premium;
+  const totalCapital = N * cand.capitalAtRisk;
+  const totalMaxLoss = N * cand.maxLoss;
+  const totalMaxProfit = N * cand.maxProfit;
+
+  // Если контрактов 0 — отдельный шаблон-предупреждение.
+  if (N === 0) {
+    return `На капитал ${fmtUsd(capital, 0)} не хватает: 1 контракт требует ${fmtUsd(cand.capitalAtRisk, 0)}. Увеличьте капитал минимум до ${fmtUsd(cand.capitalAtRisk, 0)} либо выберите другой страйк/стратегию.`;
+  }
 
   if (cand.kind === "covered_call") {
-    const strike = cand.strikes[0];
-    return [
-      `Продайте ${contractCount} ${ctrWord(contractCount)} CALL на страйке ${fmtUsd(strike)} с экспирацией ${expiry}.`,
-      `Получите премию ${fmtUsd(totalPremium)} сразу (это ${yieldS} от занятого капитала ${fmtUsd(totalCapital)} за ${dteS} = ${annualS} годовых).`,
-      `Под сделку нужно держать ${contractCount * 100} акций ${ticker} (${fmtUsd(totalCapital)}).`,
-      `Если ${ticker} останется ниже ${fmtUsd(strike)} к дате — премия ваша, акции остаются. Если уйдёт выше — акции выкупят по ${fmtUsd(strike)}, общий доход ${fmtUsd(contractCount * cand.maxProfit)}.`,
-      `Главный риск — падение акции, премия только частично компенсирует просадку.`,
-    ].join(" ");
-  }
-  if (cand.kind === "csp") {
-    const strike = cand.strikes[0];
+    const K = cand.strikes[0];
     const be = cand.breakevenLow;
     return [
-      `Продайте ${contractCount} ${ctrWord(contractCount)} PUT на страйке ${fmtUsd(strike)} с экспирацией ${expiry}.`,
-      `Получите премию ${fmtUsd(totalPremium)} сразу, заморозьте ${fmtUsd(totalCapital)} как резерв (${yieldS} от резерва за ${dteS} = ${annualS} годовых).`,
-      `Если ${ticker} останется выше ${fmtUsd(strike)} к дате — премия ваша, резерв освобождается.`,
-      `Если упадёт ниже ${fmtUsd(strike)} — вам поставят ${contractCount * 100} акций по ${fmtUsd(strike)}, реальная цена входа ${fmtUsd(be)} с учётом премии.`,
-      `Готовность купить акции по этой цене — обязательное условие для CSP.`,
+      `У вас должны быть ${N * 100} ${ctrShareWord(N * 100)} ${ticker} (это инвестиция, не убыток).`,
+      `Продайте ${N} ${callWord(N)} на $${K} с экспирацией ${expiry} — премия ${fmtUsd(totalPremium, 0)} сразу.`,
+      `Ниже $${K} к дате — премия ваша, акции остаются. Выше $${K} — акции выкупят по $${K}, итог = премия + рост до страйка = ${fmtUsd(totalMaxProfit, 0)} (потолок прибыли — выше страйка дохода больше не будет).`,
+      `Проданный колл покрыт акциями — неограниченного риска у короткой ноги нет.`,
+      `Риск ВЛАДЕНИЯ акцией (падение к нулю) сниженный премией: ${fmtUsd(totalMaxLoss, 0)} в худшем случае, точка безубытка ${fmtUsd(be)}.`,
     ].join(" ");
   }
+
+  if (cand.kind === "csp") {
+    const K = cand.strikes[0];
+    const be = cand.breakevenLow;
+    return [
+      `Продайте ${N} ${putWord(N)} на $${K} с экспирацией ${expiry} — премия ${fmtUsd(totalPremium, 0)} сразу, резерв ${fmtUsd(totalCapital, 0)} на возможный выкуп.`,
+      `Выше $${K} к дате — премия ваша, резерв освобождается.`,
+      `Ниже $${K} — поставят ${N * 100} ${ctrShareWord(N * 100)} по $${K}, реальная цена входа ${fmtUsd(be)} с учётом премии.`,
+      `Макс убыток (если акция упадёт к нулю после поставки) — ${fmtUsd(totalMaxLoss, 0)}.`,
+      `Готовность купить акции — обязательное условие.`,
+    ].join(" ");
+  }
+
   if (cand.kind === "bull_put") {
-    const [shortK, longK] = cand.strikes;
+    const [Ks, Kl] = cand.strikes;
+    const be = cand.breakevenLow;
     return [
-      `Откройте бычий вертикальный спред: продайте PUT ${fmtUsd(shortK)}, одновременно купите PUT ${fmtUsd(longK)} — обе ноги на экспирацию ${expiry}.`,
-      `Чистый кредит ${fmtUsd(totalPremium)} сразу, под спред нужен залог ${fmtUsd(totalCapital)} (это ${yieldS} за ${dteS} = ${annualS} годовых на залог).`,
-      `Если ${ticker} останется выше ${fmtUsd(shortK)} к дате — оставляете весь кредит.`,
-      `Между ${fmtUsd(longK)} и ${fmtUsd(shortK)} — частичный убыток. Ниже ${fmtUsd(longK)} — макс убыток ${fmtUsd(contractCount * cand.maxLoss)}.`,
-      `Кол-во контрактов ${contractCount}: больше не позволяет ваш капитал.`,
+      `Продайте PUT $${Ks}, одновременно купите PUT $${Kl} — обе ноги на экспирацию ${expiry} (${N} ${spreadWord(N)}).`,
+      `Чистый кредит ${fmtUsd(totalPremium, 0)}, залог ${fmtUsd(totalCapital, 0)} (он же макс убыток).`,
+      `Выше $${Ks} к дате — весь кредит ваш.`,
+      `Ниже $${Kl} — макс убыток ${fmtUsd(totalMaxLoss, 0)}, он ОГРАНИЧЕН: нижний пут защищает.`,
+      `Breakeven ${fmtUsd(be)}.`,
     ].join(" ");
   }
+
   if (cand.kind === "bear_call") {
-    const [shortK, longK] = cand.strikes;
+    const [Ks, Kl] = cand.strikes;
+    const be = cand.breakevenLow;
     return [
-      `Откройте медвежий вертикальный спред: продайте CALL ${fmtUsd(shortK)}, одновременно купите CALL ${fmtUsd(longK)} — обе ноги на экспирацию ${expiry}.`,
-      `Чистый кредит ${fmtUsd(totalPremium)} сразу, под спред нужен залог ${fmtUsd(totalCapital)} (это ${yieldS} за ${dteS} = ${annualS} годовых на залог).`,
-      `Если ${ticker} останется ниже ${fmtUsd(shortK)} к дате — оставляете весь кредит.`,
-      `Между ${fmtUsd(shortK)} и ${fmtUsd(longK)} — частичный убыток. Выше ${fmtUsd(longK)} — макс убыток ${fmtUsd(contractCount * cand.maxLoss)}.`,
-      `Кол-во контрактов ${contractCount}: больше не позволяет ваш капитал.`,
+      `Продайте CALL $${Ks}, одновременно купите CALL $${Kl} — обе ноги на экспирацию ${expiry} (${N} ${spreadWord(N)}).`,
+      `Чистый кредит ${fmtUsd(totalPremium, 0)}, залог ${fmtUsd(totalCapital, 0)} (он же макс убыток).`,
+      `Ниже $${Ks} к дате — весь кредит ваш.`,
+      `Выше $${Kl} — макс убыток ${fmtUsd(totalMaxLoss, 0)}, он ОГРАНИЧЕН: верхний колл защищает.`,
+      `Breakeven ${fmtUsd(be)}.`,
     ].join(" ");
   }
+
   if (cand.kind === "iron_condor") {
-    const [lpK, spK, scK, lcK] = cand.strikes;
+    const [KpL, KpS, KcS, KcL] = cand.strikes;
+    const beLow = cand.breakevenLow, beHigh = cand.breakevenHigh;
+    const wingPutS  = cand.wingPut  != null ? `${cand.wingPut.toFixed(0)}` : "—";
+    const wingCallS = cand.wingCall != null ? `${cand.wingCall.toFixed(0)}` : "—";
     return [
-      `Откройте Iron Condor: продайте PUT ${fmtUsd(spK)} и CALL ${fmtUsd(scK)}, защититесь покупкой PUT ${fmtUsd(lpK)} и CALL ${fmtUsd(lcK)} — все 4 ноги на экспирацию ${expiry}.`,
-      `Чистый кредит ${fmtUsd(totalPremium)} сразу, под кондор нужен залог ${fmtUsd(totalCapital)} (это ${yieldS} за ${dteS} = ${annualS} годовых).`,
-      `Если ${ticker} останется в диапазоне ${fmtUsd(spK)}–${fmtUsd(scK)} к дате — оставляете весь кредит.`,
-      `Уход за ${fmtUsd(lpK)} или за ${fmtUsd(lcK)} — макс убыток ${fmtUsd(contractCount * cand.maxLoss)}.`,
-      `Кол-во контрактов ${contractCount}: больше не позволяет ваш капитал.`,
+      `Продайте PUT $${KpS} и CALL $${KcS}, купите защитные PUT $${KpL} и CALL $${KcL} — все 4 ноги на экспирацию ${expiry} (${N} ${condorWord(N)}).`,
+      `Чистый кредит ${fmtUsd(totalPremium, 0)}, залог ${fmtUsd(totalCapital, 0)} = макс убыток (берётся БОЛЬШЕЕ крыло: put $${wingPutS} vs call $${wingCallS}, цена не пробьёт оба сразу).`,
+      `Если ${ticker} останется между $${KpS} и $${KcS} к дате — весь кредит ваш.`,
+      `Выход за крылья — макс убыток ${fmtUsd(totalMaxLoss, 0)}, ОГРАНИЧЕН конструкцией.`,
+      `Зона прибыли (с учётом кредита): ${fmtUsd(beLow)} — ${fmtUsd(beHigh)}.`,
     ].join(" ");
   }
+
   return "";
 }
+
+function ctrShareWord(n) {
+  const last = n % 10, last2 = n % 100;
+  if (last2 >= 11 && last2 <= 14) return "акций";
+  if (last === 1) return "акция";
+  if (last >= 2 && last <= 4) return "акции";
+  return "акций";
+}
+function callWord(n) { return n === 1 ? "колл" : (n >= 2 && n <= 4 ? "колла" : "коллов"); }
+function putWord(n)  { return n === 1 ? "пут"  : (n >= 2 && n <= 4 ? "пута"  : "путов"); }
+function spreadWord(n) { return n === 1 ? "спред" : (n >= 2 && n <= 4 ? "спреда" : "спредов"); }
+function condorWord(n) { return n === 1 ? "кондор" : (n >= 2 && n <= 4 ? "кондора" : "кондоров"); }
 
 function ctrWord(n) {
   if (n === 1) return "контракт";
@@ -704,7 +750,7 @@ export default function StrategyEngine({ contracts, spot, expiry, ivAvgPct, tick
             <thead>
               <tr>
                 <th style={S.thLeft}>Страйк(и)</th>
-                <th style={S.thNum}>Винрейт</th>
+                <th style={S.thNum} title="Оценка вероятности по дельте short-ноги; не точный win rate">≈ Винрейт</th>
                 <th style={S.thNum}>Премия</th>
                 <th style={S.thNum}>Доходность годовых</th>
                 <th style={S.thNum}>Breakeven</th>
@@ -756,7 +802,7 @@ function RowAndDetail({ c, expanded, onToggle, capital, spot, expiry, ticker }) 
         onClick={onToggle}
       >
         <td style={S.tdLeft}>{c.label}</td>
-        <td style={{ ...S.tdNum, color: winColor, fontWeight: 600 }}>{fmtPct(c.winratePct)}</td>
+        <td style={{ ...S.tdNum, color: winColor, fontWeight: 600 }}>≈ {fmtPct(c.winratePct)}</td>
         <td style={S.tdNum}>{fmtUsd(c.premium, 0)}</td>
         <td style={S.tdNum}>{fmtPct(c.annualizedPct)}</td>
         <td style={S.tdNum}>{beStr}</td>
@@ -774,23 +820,67 @@ function RowAndDetail({ c, expanded, onToggle, capital, spot, expiry, ticker }) 
   );
 }
 
+// Лейбл колонки «Макс убыток» подстраивается под характер риска:
+// ownership — Covered Call (риск владения акцией, не убыток стратегии)
+// obligation — CSP (обязательство купить)
+// defined — Credit spreads / Iron Condor (ограничено конструкцией)
+function riskLabel(kind) {
+  switch (kind) {
+    case "ownership":  return "Риск владения акцией (сниженный премией)";
+    case "obligation": return "Макс риск (обязательство покупки)";
+    case "defined":    return "Макс убыток (ограничен конструкцией)";
+    default:           return "Макс убыток";
+  }
+}
+
 function DetailCard({ c, capital, spot, expiry, ticker }) {
-  const contractCount = Math.max(0, Math.floor(capital / c.capitalAtRisk));
+  const N = Math.max(0, Math.floor(capital / c.capitalAtRisk));
+  const usedCapital = N * c.capitalAtRisk;
+  const remaining   = Math.max(0, capital - usedCapital);
   const explain = buildExplanation(c, capital, spot, expiry, ticker || "акция");
+  const enough = N > 0;
 
   return (
     <div style={S.detailWrap}>
       <div style={S.detailLeft}>
-        <div style={S.bigWinLabel}>Винрейт</div>
-        <div style={S.bigWinVal}>{fmtPct(c.winratePct)}</div>
+        <div style={S.bigWinLabel}>Вероятность (по δ short-ноги)</div>
+        <div style={S.bigWinVal}>≈ {fmtPct(c.winratePct)}</div>
+        <div style={S.bigWinSub}>Приближение через дельту, не точный win rate</div>
+
+        {/* Расчёт контрактов — явный блок «занято / остаётся». */}
+        <div style={enough ? S.contractsBlock : S.contractsBlockWarn}>
+          {enough ? (
+            <>
+              <div style={S.contractsLine}>
+                <span style={S.contractsBig}>{N}</span>
+                <span style={S.contractsBigSub}>{contractWord(N)} под {fmtUsd(capital, 0)}</span>
+              </div>
+              <div style={S.contractsMeta}>
+                Занято <span style={S.contractsMetaNum}>{fmtUsd(usedCapital, 0)}</span> ·
+                {" "}Остаётся <span style={S.contractsMetaNum}>{fmtUsd(remaining, 0)}</span>
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={S.contractsWarnTitle}>Капитала недостаточно</div>
+              <div style={S.contractsWarnBody}>
+                На 1 контракт требуется <span style={S.contractsMetaNum}>{fmtUsd(c.capitalAtRisk, 0)}</span>,
+                у вас <span style={S.contractsMetaNum}>{fmtUsd(capital, 0)}</span>. Увеличьте капитал
+                минимум до <span style={S.contractsMetaNum}>{fmtUsd(c.capitalAtRisk, 0)}</span> или
+                выберите другой страйк / стратегию.
+              </div>
+            </>
+          )}
+        </div>
+
         <div style={S.detailMetricRow}>
           <div>
             <div style={S.detailMetricKey}>Премия / контракт</div>
             <div style={S.detailMetricVal}>{fmtUsd(c.premium, 0)}</div>
           </div>
           <div>
-            <div style={S.detailMetricKey}>Контрактов под капитал</div>
-            <div style={S.detailMetricVal}>{contractCount}</div>
+            <div style={S.detailMetricKey}>Залог / контракт</div>
+            <div style={S.detailMetricVal}>{fmtUsd(c.capitalAtRisk, 0)}</div>
           </div>
         </div>
         <div style={S.detailMetricRow}>
@@ -813,20 +903,26 @@ function DetailCard({ c, capital, spot, expiry, ticker }) {
             </div>
           </div>
           <div>
-            <div style={S.detailMetricKey}>Залог / контракт</div>
-            <div style={S.detailMetricVal}>{fmtUsd(c.capitalAtRisk, 0)}</div>
+            <div style={S.detailMetricKey}>{c.kind === "covered_call" ? "Потолок прибыли (выше K)" : "Защита / Зона прибыли"}</div>
+            <div style={S.detailMetricVal}>
+              {c.kind === "covered_call"
+                ? `$${c.strikes[0]} (выше — дохода не будет)`
+                : (c.breakevenHigh != null ? "в коридоре" : "до short-страйка")}
+            </div>
           </div>
         </div>
-        <div style={S.detailMetricRow}>
-          <div>
-            <div style={S.detailMetricKey}>Макс прибыль на портфель</div>
-            <div style={{ ...S.detailMetricVal, color: C.marketUp }}>{fmtUsd(contractCount * c.maxProfit, 0)}</div>
+        {enough && (
+          <div style={S.detailMetricRow}>
+            <div>
+              <div style={S.detailMetricKey}>Макс прибыль на портфель</div>
+              <div style={{ ...S.detailMetricVal, color: C.marketUp }}>{fmtUsd(N * c.maxProfit, 0)}</div>
+            </div>
+            <div>
+              <div style={S.detailMetricKey}>{riskLabel(c.riskKind)}</div>
+              <div style={{ ...S.detailMetricVal, color: C.marketDown }}>{fmtUsd(N * c.maxLoss, 0)}</div>
+            </div>
           </div>
-          <div>
-            <div style={S.detailMetricKey}>Макс убыток на портфель</div>
-            <div style={{ ...S.detailMetricVal, color: C.marketDown }}>{fmtUsd(contractCount * c.maxLoss, 0)}</div>
-          </div>
-        </div>
+        )}
       </div>
       <div style={S.detailRight}>
         <div style={S.explainLabel}>Что делать</div>
@@ -847,6 +943,12 @@ function DetailCard({ c, capital, spot, expiry, ticker }) {
       </div>
     </div>
   );
+}
+
+function contractWord(n) {
+  if (n === 1) return "контракт";
+  if (n >= 2 && n <= 4) return "контракта";
+  return "контрактов";
 }
 
 // ============================================================================
@@ -963,7 +1065,29 @@ const S = {
   detailLeft: { background: C.bgMain, border: `1px solid ${C.divider}`, borderRadius: 12, padding: "18px 20px" },
   detailRight:{ background: C.bgMain, border: `1px solid ${C.divider}`, borderRadius: 12, padding: "18px 20px" },
   bigWinLabel:{ color: C.textSecondary, fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1.2 },
-  bigWinVal:  { color: C.textWhite, fontSize: 36, fontWeight: 600, fontFamily: FONT_MONO, fontVariantNumeric: "tabular-nums", letterSpacing: -0.5, marginTop: 4, marginBottom: 14 },
+  bigWinVal:  { color: C.textWhite, fontSize: 36, fontWeight: 600, fontFamily: FONT_MONO, fontVariantNumeric: "tabular-nums", letterSpacing: -0.5, marginTop: 4 },
+  bigWinSub:  { color: C.textMute, fontSize: 10, fontFamily: FONT_SANS, fontStyle: "italic", marginBottom: 14 },
+
+  // Расчёт контрактов — отдельный блок с явным «занято / остаётся».
+  contractsBlock: {
+    background: C.bgAlt, border: `1px solid ${C.divider}`,
+    borderLeft: `3px solid ${C.emerald}`,
+    borderRadius: 8, padding: "10px 14px",
+    marginBottom: 14,
+  },
+  contractsBlockWarn: {
+    background: C.bgAlt, border: `1px solid ${C.divider}`,
+    borderLeft: `3px solid ${C.marketWarning}`,
+    borderRadius: 8, padding: "10px 14px",
+    marginBottom: 14,
+  },
+  contractsLine: { display: "flex", alignItems: "baseline", gap: 8 },
+  contractsBig:  { color: C.textWhite, fontSize: 24, fontWeight: 600, fontFamily: FONT_MONO, fontVariantNumeric: "tabular-nums" },
+  contractsBigSub:{ color: C.textSecondary, fontSize: 11 },
+  contractsMeta: { color: C.textSecondary, fontSize: 11, marginTop: 4, fontFamily: FONT_SANS },
+  contractsMetaNum: { color: C.textPrimary, fontFamily: FONT_MONO, fontVariantNumeric: "tabular-nums" },
+  contractsWarnTitle: { color: C.marketWarning, fontSize: 12, fontWeight: 600, marginBottom: 4 },
+  contractsWarnBody:  { color: C.textSecondary, fontSize: 11, lineHeight: 1.5 },
   detailMetricRow: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 12 },
   detailMetricKey: { color: C.textSecondary, fontSize: 10, fontWeight: 500, textTransform: "uppercase", letterSpacing: 1, marginBottom: 3 },
   detailMetricVal: { color: C.textWhite, fontSize: 16, fontWeight: 600, fontFamily: FONT_MONO, fontVariantNumeric: "tabular-nums" },
