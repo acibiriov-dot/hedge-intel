@@ -1,36 +1,39 @@
-// GET /api/options-chain?ticker=AAPL
-// Returns: { ok, base, ticker, underlyingPrice, contracts: [...] } or
-//          { ok: false, error, status, debug }
+// GET /api/options-chain?ticker=AAPL[&expiry=YYYY-MM-DD]
 //
-// REQUIRED env var:
-//   MASSIVE_API_KEY — Massive (бывш. Polygon) API ключ. Также принимается
-//                     POLYGON_API_KEY для backward-совместимости.
+// Два режима — frontend дёргает initial один раз на тикер и per-expiry при
+// смене даты в селекторе.
 //
-// API_BASE стратегия:
-//   1) Пробуем PRIMARY (https://api.polygon.io) — на 2026-05 это всё ещё
-//      рабочий endpoint, бренд официально не сменился.
-//   2) Если основной отдаёт 404 / DNS ошибку / connection refused →
-//      пробуем FALLBACK (https://api.massive.com) — на случай если ребренд
-//      когда-нибудь произойдёт реально или DNS изменится без анонса.
-//   3) Auth-ошибки (401/403), rate-limit (429), серверные ошибки (5xx) —
-//      НЕ триггерят fallback, возвращаются как есть.
+// ── Mode 1: INITIAL (без expiry param) ────────────────────────────────────
+//   Назначение: дать клиенту список всех экспираций для dropdown'а + сразу
+//   готовые данные для default-даты, чтобы первое отрисованное состояние
+//   было полным.
+//   Параллельно:
+//     · Massive unfiltered snapshot — underlying price + baseline.
+//     · Finviz full CSV — полный список экспираций.
+//     · FMP quote — best-effort underlying price.
+//   Затем server picks defaultExpiry (today если 0DTE с volume → nearest
+//   future с volume → с OI → любая будущая) и делает Finviz e=defaultExpiry
+//   для реальных греков/IV/премий.
+//   Возвращает: expirations[], defaultExpiry, expiry=defaultExpiry,
+//   contracts (для default), underlyingPrice.
 //
-// Endpoint: /v3/snapshot/options/{ticker}?apiKey={key}&limit=250
-//   Опциональный фильтр expiration_date=YYYY-MM-DD — снимает cap на 250
-//   контрактов для всей цепочки и возвращает 250 ИМЕННО для запрошенной
-//   экспирации (хватает на все страйки даже у ликвидных тикеров).
-// Документация: https://polygon.io/docs/options/get_v3_snapshot_options__underlyingasset
+// ── Mode 2: PER-EXPIRY (?expiry=YYYY-MM-DD) ───────────────────────────────
+//   Назначение: вернуть полные греки/IV/премии для выбранной даты без
+//   повторной выкачки полного списка экспираций.
+//   Параллельно:
+//     · Finviz CSV с e=expiry — primary греков/IV/премии. Verified probe
+//       2026-05: AAPL 2026-06-26 (28 дней) → 116 строк, 0 пустых Delta,
+//       0 пустых IV. На дальних датах Finviz e= тянет всё.
+//     · Massive snapshot с expiration_date=expiry — fallback на случай
+//       если Finviz пропустил какой-то страйк.
+//     · FMP quote — best-effort underlying price.
+//   Возвращает: expiry, contracts (только для expiry), underlyingPrice.
+//   БЕЗ expirations[]/defaultExpiry — frontend закэшировал от initial.
 //
-// Стратегия покрытия greeks:
-//   Initial unfiltered call cap'ится на 250 контрактов и сгруппирован вокруг
-//   ближайших экспираций. Далёкие даты (например AAPL 2026-06-26) выпадают
-//   из выборки — клиент видел "—" во всех греках. Fallback на Finviz Elite
-//   тоже бесполезен: для AAPL/SPY/тестовых тикеров колонки Delta/IV в CSV
-//   приходят ПУСТЫМИ для всех 28 экспираций (verified 2026-05 probe).
-//
-//   Решение: после initial call идентифицируем экспирации без greek-coverage
-//   и параллельно запрашиваем для каждой `expiration_date=YYYY-MM-DD` snapshot.
-//   Polygon Starter не лимитит RPS → 28 parallel calls укладываются в 30s.
+// REQUIRED env vars:
+//   MASSIVE_API_KEY (or POLYGON_API_KEY) — для Massive snapshot fallback.
+//   FINVIZ_KEY — для Finviz Elite CSV export (primary греков).
+//   FMP_API_KEY — для FMP quote (best-effort underlying).
 
 export const maxDuration = 30;
 export const dynamic = "force-dynamic";
@@ -39,13 +42,12 @@ const API_BASE_PRIMARY  = "https://api.polygon.io";
 const API_BASE_FALLBACK = "https://api.massive.com";
 const CONTRACT_LIMIT = 250;
 
-// Cap on how many additional per-expiry fetches we'll make. Защита от
-// случайного blow-up если Finviz вернёт мусорные даты или тикер очень
-// богатый на экспирации (LEAPs до 2030+).
-const MAX_EXTRA_EXPIRY_FETCHES = 35;
+// ============================================================================
+// External fetchers
+// ============================================================================
 
-// Helper: один snapshot-запрос Massive с base-cascade и нормализованными
-// ошибками. extraQuery — дополнительные query-параметры без leading "&".
+// Massive snapshot — base cascade (polygon.io primary → massive.com fallback).
+// extraQuery: без leading "&", например "expiration_date=2026-06-26".
 async function fetchMassiveSnapshot(apiKey, ticker, extraQuery = "") {
   const tried = [];
   for (const base of [API_BASE_PRIMARY, API_BASE_FALLBACK]) {
@@ -53,57 +55,33 @@ async function fetchMassiveSnapshot(apiKey, ticker, extraQuery = "") {
       `${base}/v3/snapshot/options/${encodeURIComponent(ticker)}` +
       `?apiKey=${encodeURIComponent(apiKey)}&limit=${CONTRACT_LIMIT}` +
       (extraQuery ? `&${extraQuery}` : "");
-
     let resp;
-    try {
-      resp = await fetch(url, { cache: "no-store" });
-    } catch (e) {
-      tried.push({ base, error: e?.message || String(e) });
-      continue;
-    }
-
-    if (resp.status === 404) {
-      tried.push({ base, status: 404 });
-      continue;
-    }
-
+    try { resp = await fetch(url, { cache: "no-store" }); }
+    catch (e) { tried.push({ base, error: e?.message || String(e) }); continue; }
+    if (resp.status === 404) { tried.push({ base, status: 404 }); continue; }
     if (!resp.ok) {
       const errText = await resp.text().catch(() => "");
-      let parsed = null;
-      try { parsed = JSON.parse(errText); } catch {}
+      let parsed = null; try { parsed = JSON.parse(errText); } catch {}
       return {
-        ok: false,
-        status: resp.status,
-        error: parsed?.error || parsed?.message || `Massive API ${resp.status}`,
-        base,
-        raw: errText.slice(0, 800),
-        tried,
+        ok: false, status: resp.status,
+        error: parsed?.error || parsed?.message || `Massive ${resp.status}`,
+        base, raw: errText.slice(0, 800), tried,
       };
     }
-
     const data = await resp.json().catch(() => null);
     if (!data?.results) {
       return {
-        ok: false,
-        status: 502,
-        error: "Empty or malformed response (no results array)",
-        base,
-        raw: JSON.stringify(data || {}).slice(0, 500),
-        tried,
+        ok: false, status: 502,
+        error: "Empty Massive response (no results)",
+        base, raw: JSON.stringify(data || {}).slice(0, 500), tried,
       };
     }
     return { ok: true, base, data, tried };
   }
-  return {
-    ok: false,
-    status: 502,
-    error: "Все endpoint'ы недоступны (404 / DNS / connect)",
-    tried,
-  };
+  return { ok: false, status: 502, error: "All Massive endpoints unavailable", tried };
 }
 
-// FMP — best-effort fetch для underlying price. Starter Massive план не
-// всегда отдаёт underlying_asset.price → FMP как defensive fallback.
+// FMP — best-effort underlying price.
 async function fetchFmpPrice(ticker) {
   const key = (process.env.FMP_API_KEY || "").trim();
   if (!key) return { price: null, source: "fmp_unconfigured" };
@@ -119,27 +97,16 @@ async function fetchFmpPrice(ticker) {
   }
 }
 
-// ─── Finviz Elite options chain ──────────────────────────────────────────
-// Используется ТОЛЬКО для премии (Last Close / Mid / Ask / Bid) — Massive
-// Starter не отдаёт котировки. Делта/гамма/тета/вега/IV из Finviz в проде
-// приходят пустыми (verified probe) — больше на них НЕ опираемся.
-function parseCsvLine(line) {
-  const result = [];
-  let cur = "", inQ = false;
-  for (const ch of line) {
-    if (ch === '"') { inQ = !inQ; }
-    else if (ch === "," && !inQ) { result.push(cur); cur = ""; }
-    else { cur += ch; }
-  }
-  result.push(cur);
-  return result;
-}
-
-async function fetchFinvizOptionsChain(ticker) {
+// Finviz Elite options chain. expiry="" → полная цепочка (все даты),
+// expiry="YYYY-MM-DD" → только выбранная дата (Finviz возвращает полные
+// греки/IV для любого срока при использовании e= параметра).
+async function fetchFinvizOptionsChain(ticker, expiry = "") {
   const token = (process.env.FINVIZ_KEY || "").trim();
   if (!token) return { rows: [], error: "FINVIZ_KEY not set", status: 0 };
 
-  const url = `https://elite.finviz.com/export/options?t=${encodeURIComponent(ticker)}&ty=oc&auth=${encodeURIComponent(token)}`;
+  let url = `https://elite.finviz.com/export/options?t=${encodeURIComponent(ticker)}&ty=oc&auth=${encodeURIComponent(token)}`;
+  if (expiry) url += `&e=${encodeURIComponent(expiry)}`;
+
   try {
     const r = await fetch(url, {
       headers: {
@@ -151,7 +118,7 @@ async function fetchFinvizOptionsChain(ticker) {
     });
     if (!r.ok) {
       const errText = await r.text().catch(() => "");
-      console.error("[options-chain.finviz]", r.status, errText.slice(0, 300));
+      console.error("[options-chain.finviz]", expiry || "(all)", r.status, errText.slice(0, 300));
       return { rows: [], error: `Finviz ${r.status}: ${errText.slice(0, 200)}`, status: r.status };
     }
     const text = (await r.text()).trim();
@@ -159,7 +126,6 @@ async function fetchFinvizOptionsChain(ticker) {
       console.error("[options-chain.finviz] received HTML — auth or ticker issue");
       return { rows: [], error: "Finviz returned HTML (auth / invalid ticker)", status: 200 };
     }
-
     const lines = text.split(/\r?\n/).filter(l => l.length > 0);
     if (lines.length < 2) return { rows: [], error: "Empty CSV from Finviz", status: 200 };
 
@@ -178,14 +144,30 @@ async function fetchFinvizOptionsChain(ticker) {
   }
 }
 
-// Parse Finviz numeric — tolerates "23.45%", "5,000", empty string.
+// ============================================================================
+// Parsing helpers
+// ============================================================================
+
+function parseCsvLine(line) {
+  const result = [];
+  let cur = "", inQ = false;
+  for (const ch of line) {
+    if (ch === '"') { inQ = !inQ; }
+    else if (ch === "," && !inQ) { result.push(cur); cur = ""; }
+    else { cur += ch; }
+  }
+  result.push(cur);
+  return result;
+}
+
+// "23.45%", "5,000", "" → number | null
 function parseFvNum(v) {
   if (v == null || v === "") return null;
   const n = parseFloat(String(v).replace("%", "").replace(/,/g, ""));
   return Number.isFinite(n) ? n : null;
 }
 
-// Convert Finviz date "M/D/YYYY" → ISO "YYYY-MM-DD" (matches Massive).
+// "M/D/YYYY" → "YYYY-MM-DD" | null
 function parseFvDateToIso(s) {
   if (!s) return null;
   const m = String(s).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
@@ -193,12 +175,326 @@ function parseFvDateToIso(s) {
   return `${m[3]}-${String(m[1]).padStart(2, "0")}-${String(m[2]).padStart(2, "0")}`;
 }
 
+// Massive contract → flat shape used in API response.
+function normalizeMassive(c) {
+  if (!c?.details) return null;
+  const d = c.details;
+  return {
+    contractTicker: d.ticker || null,
+    type:           d.contract_type || null,
+    strike:         num(d.strike_price),
+    expiration:     d.expiration_date || null,
+    delta:          num(c.greeks?.delta),
+    gamma:          num(c.greeks?.gamma),
+    theta:          num(c.greeks?.theta),
+    vega:           num(c.greeks?.vega),
+    iv:             num(c.implied_volatility),
+    openInterest:   num(c.open_interest),
+    breakEvenPrice: num(c.break_even_price),
+    last:           num(c.day?.close),
+    volume:         num(c.day?.volume),
+  };
+}
+
+function num(v) {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+// Build unified contract from Finviz row + optional Massive fallback.
+// Greeks priority: Finviz (primary, per probe) → Massive (fallback for ниши
+// где Finviz row есть но греки пустые).
+function buildContractFromFinviz(fv, massiveMaybe) {
+  const type = (fv.Type || "").trim().toLowerCase();
+  const strike = parseFvNum(fv.Strike);
+  const expIso = parseFvDateToIso(fv.Expiry);
+  if (!type || !Number.isFinite(strike) || !expIso) return null;
+
+  // Premium priority: Last Close → Mid(Bid,Ask) → Ask → Bid.
+  const lastClose = parseFvNum(fv["Last Close"]);
+  const bid = parseFvNum(fv.Bid);
+  const ask = parseFvNum(fv.Ask);
+  let premium = null, premiumSource = null;
+  if (lastClose != null && lastClose > 0) { premium = lastClose; premiumSource = "last_close"; }
+  else if (bid != null && ask != null && bid > 0 && ask > 0) { premium = (bid + ask) / 2; premiumSource = "mid"; }
+  else if (ask != null && ask > 0) { premium = ask; premiumSource = "ask"; }
+  else if (bid != null && bid > 0) { premium = bid; premiumSource = "bid"; }
+
+  // Finviz IV приходит в percent, Massive в decimal → нормализуем к decimal.
+  const fvIvPct = parseFvNum(fv.IV);
+  const fvIvDec = fvIvPct != null ? fvIvPct / 100 : null;
+  const fvDelta = parseFvNum(fv.Delta);
+  const fvGamma = parseFvNum(fv.Gamma);
+  const fvTheta = parseFvNum(fv.Theta);
+  const fvVega  = parseFvNum(fv.Vega);
+
+  // Источник греков — кто реально дал значение (для diagnostics).
+  const greeksFromFinviz = fvDelta != null;
+  const greeksFromMassive = !greeksFromFinviz && massiveMaybe?.delta != null;
+
+  return {
+    contractTicker: fv["Contract Name"] || massiveMaybe?.contractTicker || null,
+    type, strike, expiration: expIso,
+    delta:        fvDelta ?? massiveMaybe?.delta  ?? null,
+    gamma:        fvGamma ?? massiveMaybe?.gamma  ?? null,
+    theta:        fvTheta ?? massiveMaybe?.theta  ?? null,
+    vega:         fvVega  ?? massiveMaybe?.vega   ?? null,
+    iv:           fvIvDec ?? massiveMaybe?.iv     ?? null,
+    openInterest: parseFvNum(fv["Open Int."]) ?? massiveMaybe?.openInterest ?? null,
+    volume:       parseFvNum(fv.Volume)       ?? massiveMaybe?.volume       ?? null,
+    marketPremium: premium,
+    premiumSource,
+    greeksSource: greeksFromFinviz ? "finviz" : (greeksFromMassive ? "massive" : "none"),
+  };
+}
+
+// Server-side default expiry picker — синхронизирована с frontend'ом.
+//   1) today если volumeSum > 0 (liquid 0DTE — SPX/SPY)
+//   2) nearest future с volumeSum > 0
+//   3) nearest future с oiSum > 0 (off-hours probe)
+//   4) первое доступное по дате
+function pickDefaultExpiry(expirations) {
+  if (!expirations?.length) return null;
+  const today = todayIsoServer();
+  const todayE = expirations.find(e => e.expiry === today);
+  if (todayE && todayE.volumeSum > 0) return today;
+  const futureWithVol = expirations.filter(e => e.expiry >= today && e.volumeSum > 0)
+    .sort((a, b) => (a.expiry < b.expiry ? -1 : 1))[0];
+  if (futureWithVol) return futureWithVol.expiry;
+  const futureWithOi = expirations.filter(e => e.expiry >= today && e.oiSum > 0)
+    .sort((a, b) => (a.expiry < b.expiry ? -1 : 1))[0];
+  if (futureWithOi) return futureWithOi.expiry;
+  const future = expirations.filter(e => e.expiry >= today)
+    .sort((a, b) => (a.expiry < b.expiry ? -1 : 1))[0];
+  return future?.expiry || expirations[expirations.length - 1].expiry;
+}
+
+function todayIsoServer() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// ============================================================================
+// Common: build contracts list from Finviz e= rows + Massive fallback map
+// ============================================================================
+
+function assembleContracts(finvizRows, massiveByKey) {
+  let contractsFromFinviz = 0, contractsMassiveOnly = 0;
+  const contracts = [];
+  const seenKeys = new Set();
+
+  for (const fv of finvizRows) {
+    const type = (fv.Type || "").trim().toLowerCase();
+    const strike = parseFvNum(fv.Strike);
+    const expIso = parseFvDateToIso(fv.Expiry);
+    if (!type || !Number.isFinite(strike) || !expIso) continue;
+    const key = `${strike}|${type}|${expIso}`;
+    const c = buildContractFromFinviz(fv, massiveByKey.get(key));
+    if (!c) continue;
+    contracts.push(c);
+    seenKeys.add(key);
+    contractsFromFinviz++;
+  }
+  // Massive-only: контракты которых Finviz не отдал (пропущенные страйки).
+  for (const [key, m] of massiveByKey) {
+    if (seenKeys.has(key)) continue;
+    contracts.push({
+      contractTicker: m.contractTicker,
+      type: m.type, strike: m.strike, expiration: m.expiration,
+      delta: m.delta, gamma: m.gamma, theta: m.theta, vega: m.vega,
+      iv: m.iv,
+      openInterest: m.openInterest, volume: m.volume,
+      marketPremium: m.last ?? null,
+      premiumSource: m.last != null ? "massive_day_close" : null,
+      greeksSource: m.delta != null ? "massive" : "none",
+    });
+    contractsMassiveOnly++;
+  }
+  return { contracts, contractsFromFinviz, contractsMassiveOnly };
+}
+
+// ============================================================================
+// Mode handlers
+// ============================================================================
+
+async function handlePerExpiry({ apiKey, ticker, expiry }) {
+  // 3 параллельных запроса для одной выбранной даты — все нужны.
+  const [finviz, massive, fmp] = await Promise.all([
+    fetchFinvizOptionsChain(ticker, expiry),
+    fetchMassiveSnapshot(apiKey, ticker, `expiration_date=${encodeURIComponent(expiry)}`),
+    fetchFmpPrice(ticker),
+  ]);
+
+  const massiveContracts = massive.ok
+    ? massive.data.results.map(normalizeMassive).filter(Boolean)
+    : [];
+  const massivePrice = massive.ok
+    ? (massive.data.results[0]?.underlying_asset?.price ?? null)
+    : null;
+  const underlyingPrice = fmp.price ?? massivePrice;
+
+  const massiveByKey = new Map();
+  for (const c of massiveContracts) {
+    massiveByKey.set(`${c.strike}|${c.type}|${c.expiration}`, c);
+  }
+
+  const { contracts, contractsFromFinviz, contractsMassiveOnly } =
+    assembleContracts(finviz.rows, massiveByKey);
+
+  return Response.json({
+    ok: true,
+    ticker,
+    expiry,
+    underlyingPrice,
+    priceSources: {
+      massive: massivePrice,
+      fmp: fmp.price,
+      used: underlyingPrice === fmp.price && fmp.price != null ? "fmp" : "massive",
+      fmp_status: fmp.source,
+    },
+    contracts,
+    contractCount: contracts.length,
+    dataSources: {
+      finvizExpiryRows: finviz.rows?.length || 0,
+      finvizError: finviz.error || null,
+      finvizStatus: finviz.status,
+      massiveExpiryContracts: massiveContracts.length,
+      massiveError: massive.ok ? null : massive.error,
+      contractsFromFinviz,
+      contractsMassiveOnly,
+    },
+  });
+}
+
+async function handleInitial({ apiKey, ticker }) {
+  // Stage A: параллельно — Massive unfiltered, Finviz full CSV, FMP.
+  const [massive, finvizFull, fmp] = await Promise.all([
+    fetchMassiveSnapshot(apiKey, ticker),
+    fetchFinvizOptionsChain(ticker),
+    fetchFmpPrice(ticker),
+  ]);
+
+  // Если оба primary-источника пустые — возвращаем ошибку.
+  if (!massive.ok && (!finvizFull.rows || finvizFull.rows.length === 0)) {
+    return Response.json(
+      {
+        ok: false,
+        error: "Не удалось получить данные ни от Massive, ни от Finviz",
+        massive: massive.error,
+        finviz: finvizFull.error,
+        tried: massive.tried,
+      },
+      { status: 502 }
+    );
+  }
+
+  const massiveContracts = massive.ok
+    ? massive.data.results.map(normalizeMassive).filter(Boolean)
+    : [];
+  const massivePrice = massive.ok
+    ? (massive.data.results[0]?.underlying_asset?.price ?? null)
+    : null;
+  const underlyingPrice = fmp.price ?? massivePrice;
+
+  // Build expirations summary. Primary source — Finviz full CSV (полнее),
+  // fallback — Massive unfiltered.
+  const expirationsByDate = new Map();
+  function bump(expIso, type, oi, vol) {
+    let s = expirationsByDate.get(expIso);
+    if (!s) {
+      s = { expiry: expIso, contractCount: 0, volumeSum: 0, oiSum: 0, callOi: 0, putOi: 0 };
+      expirationsByDate.set(expIso, s);
+    }
+    s.contractCount++;
+    s.volumeSum += vol || 0;
+    s.oiSum += oi || 0;
+    if (type === "call") s.callOi += oi || 0;
+    if (type === "put")  s.putOi  += oi || 0;
+  }
+  for (const fv of finvizFull.rows) {
+    const expIso = parseFvDateToIso(fv.Expiry);
+    const type = (fv.Type || "").trim().toLowerCase();
+    if (!expIso || !type) continue;
+    bump(expIso, type, parseFvNum(fv["Open Int."]) || 0, parseFvNum(fv.Volume) || 0);
+  }
+  if (expirationsByDate.size === 0) {
+    for (const c of massiveContracts) {
+      if (!c.expiration || !c.type) continue;
+      bump(c.expiration, c.type, c.openInterest || 0, c.volume || 0);
+    }
+  }
+  const expirations = [...expirationsByDate.values()]
+    .sort((a, b) => (a.expiry < b.expiry ? -1 : 1));
+
+  const defaultExpiry = pickDefaultExpiry(expirations);
+
+  // Stage B: Finviz e=defaultExpiry — primary греков для default.
+  // Сабсеквентно, потому что нужно знать defaultExpiry.
+  let finvizExpiry = { rows: [], error: null, status: 0 };
+  if (defaultExpiry) {
+    finvizExpiry = await fetchFinvizOptionsChain(ticker, defaultExpiry);
+  }
+
+  // Massive fallback для default'ной даты — только те контракты из
+  // unfiltered snapshot которые совпадают с defaultExpiry.
+  const massiveByKey = new Map();
+  for (const c of massiveContracts) {
+    if (c.expiration === defaultExpiry) {
+      massiveByKey.set(`${c.strike}|${c.type}|${c.expiration}`, c);
+    }
+  }
+
+  const { contracts, contractsFromFinviz, contractsMassiveOnly } =
+    assembleContracts(finvizExpiry.rows, massiveByKey);
+
+  return Response.json({
+    ok: true,
+    ticker,
+    underlyingPrice,
+    priceSources: {
+      massive: massivePrice,
+      fmp: fmp.price,
+      used: underlyingPrice === fmp.price && fmp.price != null ? "fmp" : "massive",
+      fmp_status: fmp.source,
+    },
+    expirations,
+    defaultExpiry,
+    expiry: defaultExpiry,
+    contracts,
+    contractCount: contracts.length,
+    dataSources: {
+      massiveUnfilteredContracts: massiveContracts.length,
+      finvizFullRows: finvizFull.rows?.length || 0,
+      finvizExpiryRows: finvizExpiry.rows?.length || 0,
+      finvizFullError: finvizFull.error || null,
+      finvizExpiryError: finvizExpiry.error || null,
+      contractsFromFinviz,
+      contractsMassiveOnly,
+    },
+    base: massive.ok ? massive.base : null,
+    tried: massive.tried || [],
+  });
+}
+
+// ============================================================================
+// Entry
+// ============================================================================
+
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
-  const tickerRaw = (searchParams.get("ticker") || "").trim().toUpperCase();
-  if (!tickerRaw || !/^[A-Z0-9.-]{1,10}$/.test(tickerRaw)) {
+  const ticker = (searchParams.get("ticker") || "").trim().toUpperCase();
+  const expiry = (searchParams.get("expiry") || "").trim();
+
+  if (!ticker || !/^[A-Z0-9.-]{1,10}$/.test(ticker)) {
     return Response.json(
       { ok: false, error: "Нужен корректный ticker в query (?ticker=AAPL)" },
+      { status: 400 }
+    );
+  }
+  if (expiry && !/^\d{4}-\d{2}-\d{2}$/.test(expiry)) {
+    return Response.json(
+      { ok: false, error: "expiry должен быть в формате YYYY-MM-DD" },
       { status: 400 }
     );
   }
@@ -218,254 +514,7 @@ export async function GET(request) {
     );
   }
 
-  // 1. Initial unfiltered snapshot — нужен для underlying_asset.price и
-  // как baseline покрытие ближайших экспираций.
-  const initial = await fetchMassiveSnapshot(apiKey, tickerRaw);
-  if (!initial.ok) {
-    return Response.json(
-      {
-        ok: false,
-        error: initial.error,
-        status: initial.status,
-        base: initial.base,
-        raw: initial.raw,
-        tried: initial.tried,
-      },
-      { status: initial.status || 502 }
-    );
-  }
-
-  const initialContracts = initial.data.results.map(normalizeContract).filter(Boolean);
-  const massivePrice = initial.data.results[0]?.underlying_asset?.price ?? null;
-
-  // 2. Параллельно: FMP underlying-price + Finviz CSV.
-  const [fmp, finviz] = await Promise.all([
-    fetchFmpPrice(tickerRaw),
-    fetchFinvizOptionsChain(tickerRaw),
-  ]);
-  const underlyingPrice = fmp.price ?? massivePrice;
-
-  // 3. Собираем универсум всех экспираций (Massive initial + Finviz).
-  const allExpiries = new Set();
-  for (const c of initialContracts) if (c.expiration) allExpiries.add(c.expiration);
-  for (const fv of finviz.rows) {
-    const e = parseFvDateToIso(fv.Expiry);
-    if (e) allExpiries.add(e);
-  }
-
-  // 4. Считаем coverage по каждой экспирации в initial response.
-  // Coverage = доля контрактов с непустыми greeks. Дальние даты обычно
-  // имеют 0 контрактов в initial (cap 250 → не дотянулся).
-  const initialCoverage = new Map(); // expIso → {total, withGreeks}
-  for (const c of initialContracts) {
-    const has = (c.delta != null && c.iv != null) ? 1 : 0;
-    const prev = initialCoverage.get(c.expiration) || { total: 0, withGreeks: 0 };
-    prev.total++; prev.withGreeks += has;
-    initialCoverage.set(c.expiration, prev);
-  }
-
-  // 5. Определяем какие экспирации нуждаются в targeted per-expiry fetch.
-  // Критерий: либо вообще нет контрактов в initial, либо greek-coverage < 80%.
-  // Sorted по дате для предсказуемости (ближайшие первыми — если упрёмся
-  // в MAX_EXTRA_EXPIRY_FETCHES, отрежем самые далёкие).
-  const expiriesNeedingFetch = [...allExpiries]
-    .filter(e => {
-      const cov = initialCoverage.get(e);
-      if (!cov || cov.total === 0) return true;
-      return cov.withGreeks / cov.total < 0.8;
-    })
-    .sort()
-    .slice(0, MAX_EXTRA_EXPIRY_FETCHES);
-
-  // 6. Параллельный per-expiry fetch. Polygon Starter без RPS-лимита →
-  // Promise.all безопасен. Каждый запрос ~300-500ms → slowest determines latency.
-  const additionalSnapshots = await Promise.all(
-    expiriesNeedingFetch.map(e =>
-      fetchMassiveSnapshot(apiKey, tickerRaw, `expiration_date=${encodeURIComponent(e)}`)
-        .then(r => ({ expiry: e, result: r }))
-    )
-  );
-
-  // 7. Merge: initial → per-expiry. Каждая targeted выборка точнее по своей
-  // экспирации, но может вернуть ошибку (rate-limit, plan-restriction) —
-  // в таком случае оставляем то, что есть от initial. Перезаписываем только
-  // если новый контракт имеет greeks, которых не было у существующего.
-  const massiveByKey = new Map();
-  for (const c of initialContracts) {
-    massiveByKey.set(`${c.strike}|${c.type}|${c.expiration}`, c);
-  }
-  const additionalStats = {
-    requested: expiriesNeedingFetch.length,
-    ok: 0,
-    failed: 0,
-    contractsAdded: 0,
-    contractsUpgraded: 0,
-    errors: [],
-  };
-  for (const { expiry, result } of additionalSnapshots) {
-    if (!result.ok) {
-      additionalStats.failed++;
-      additionalStats.errors.push({ expiry, error: result.error, status: result.status });
-      continue;
-    }
-    additionalStats.ok++;
-    for (const raw of result.data.results) {
-      const c = normalizeContract(raw);
-      if (!c) continue;
-      const key = `${c.strike}|${c.type}|${c.expiration}`;
-      const existing = massiveByKey.get(key);
-      if (!existing) {
-        massiveByKey.set(key, c);
-        additionalStats.contractsAdded++;
-      } else if (existing.delta == null && c.delta != null) {
-        // Upgrade: ту же позицию, но с заполненными greeks.
-        massiveByKey.set(key, c);
-        additionalStats.contractsUpgraded++;
-      }
-    }
-  }
-
-  // 8. Build unified chain. Iterate over Finviz rows (полное покрытие
-  // экспираций для премии) + добавляем "massive-only" контракты, у которых
-  // нет Finviz-соответствия (на случай если Finviz пропустил какой-то страйк).
-  let massiveMatched = 0, finvizOnly = 0, massiveOnly = 0;
-  const unifiedContracts = [];
-  const seenKeys = new Set();
-
-  for (const fv of finviz.rows) {
-    const type = (fv.Type || "").trim().toLowerCase();
-    const strike = parseFvNum(fv.Strike);
-    const expIso = parseFvDateToIso(fv.Expiry);
-    if (!type || !Number.isFinite(strike) || !expIso) continue;
-
-    const key = `${strike}|${type}|${expIso}`;
-    seenKeys.add(key);
-    const massive = massiveByKey.get(key);
-    if (massive) massiveMatched++; else finvizOnly++;
-
-    // Premium priority: Last Close → Mid(Bid,Ask) → Ask → Bid.
-    const lastClose = parseFvNum(fv["Last Close"]);
-    const bid = parseFvNum(fv.Bid);
-    const ask = parseFvNum(fv.Ask);
-    let premium = null, premiumSource = null;
-    if (lastClose != null && lastClose > 0) { premium = lastClose; premiumSource = "last_close"; }
-    else if (bid != null && ask != null && bid > 0 && ask > 0) { premium = (bid + ask) / 2; premiumSource = "mid"; }
-    else if (ask != null && ask > 0) { premium = ask; premiumSource = "ask"; }
-    else if (bid != null && bid > 0) { premium = bid; premiumSource = "bid"; }
-
-    // Finviz IV percent → decimal — на случай если когда-нибудь начнёт
-    // приходить заполненным (verified probe 2026-05: пустое, не используется).
-    const fvIvPct = parseFvNum(fv.IV);
-    const fvIvDec = fvIvPct != null ? fvIvPct / 100 : null;
-
-    unifiedContracts.push({
-      contractTicker: fv["Contract Name"] || massive?.contractTicker || null,
-      type, strike, expiration: expIso,
-      delta:         massive?.delta        ?? parseFvNum(fv.Delta),
-      gamma:         massive?.gamma        ?? parseFvNum(fv.Gamma),
-      theta:         massive?.theta        ?? parseFvNum(fv.Theta),
-      vega:          massive?.vega         ?? parseFvNum(fv.Vega),
-      iv:            massive?.iv           ?? fvIvDec,
-      openInterest:  massive?.openInterest ?? parseFvNum(fv["Open Int."]),
-      volume:        massive?.volume       ?? parseFvNum(fv.Volume),
-      marketPremium: premium,
-      premiumSource,
-      greeksSource:  massive ? "massive" : (parseFvNum(fv.Delta) != null ? "finviz" : "none"),
-    });
-  }
-
-  // Massive-only: контракты, которых не было в Finviz CSV.
-  for (const [key, m] of massiveByKey) {
-    if (seenKeys.has(key)) continue;
-    massiveOnly++;
-    unifiedContracts.push({
-      contractTicker: m.contractTicker,
-      type: m.type, strike: m.strike, expiration: m.expiration,
-      delta: m.delta, gamma: m.gamma, theta: m.theta, vega: m.vega,
-      iv: m.iv,
-      openInterest: m.openInterest, volume: m.volume,
-      marketPremium: m.last ?? null,
-      premiumSource: m.last != null ? "massive_day_close" : null,
-      greeksSource: "massive",
-    });
-  }
-
-  // 9. Build expirations summary с coverage-метрикой — клиент видит
-  // в dropdown'е реальное состояние данных.
-  const expirySummary = new Map();
-  for (const c of unifiedContracts) {
-    let s = expirySummary.get(c.expiration);
-    if (!s) {
-      s = {
-        expiry: c.expiration,
-        contractCount: 0,
-        volumeSum: 0, oiSum: 0, callOi: 0, putOi: 0,
-        withGreeks: 0,
-      };
-      expirySummary.set(c.expiration, s);
-    }
-    s.contractCount++;
-    s.volumeSum += c.volume || 0;
-    s.oiSum += c.openInterest || 0;
-    if (c.type === "call") s.callOi += c.openInterest || 0;
-    if (c.type === "put")  s.putOi  += c.openInterest || 0;
-    if (c.delta != null && c.iv != null) s.withGreeks++;
-  }
-  const expirations = [...expirySummary.values()]
-    .map(s => ({ ...s, greekCoverage: s.contractCount > 0 ? s.withGreeks / s.contractCount : 0 }))
-    .sort((a, b) => a.expiry < b.expiry ? -1 : a.expiry > b.expiry ? 1 : 0);
-
-  return Response.json({
-    ok: true,
-    base: initial.base,
-    ticker: tickerRaw,
-    underlyingPrice,
-    priceSources: {
-      massive: massivePrice,
-      fmp: fmp.price,
-      used: underlyingPrice === fmp.price && fmp.price != null ? "fmp" : "massive",
-      fmp_status: fmp.source,
-    },
-    dataSources: {
-      massiveInitialContracts: initialContracts.length,
-      massiveTotalAfterEnrich: massiveByKey.size,
-      finvizRows: finviz.rows?.length || 0,
-      unifiedContracts: unifiedContracts.length,
-      massiveMatched, finvizOnly, massiveOnly,
-      finvizError: finviz.error || null,
-      finvizStatus: finviz.status,
-      additional: additionalStats,
-    },
-    expirations,
-    contractCount: unifiedContracts.length,
-    contracts: unifiedContracts,
-    tried: initial.tried,
-  });
-}
-
-// Plucks the fields we render in the UI; defensive about missing nested keys.
-function normalizeContract(c) {
-  if (!c?.details) return null;
-  const d = c.details;
-  return {
-    contractTicker:    d.ticker || null,
-    type:              d.contract_type || null,            // "call" | "put"
-    strike:            num(d.strike_price),
-    expiration:        d.expiration_date || null,           // "YYYY-MM-DD"
-    delta:             num(c.greeks?.delta),
-    gamma:             num(c.greeks?.gamma),
-    theta:             num(c.greeks?.theta),
-    vega:              num(c.greeks?.vega),
-    iv:                num(c.implied_volatility),           // in decimal (0.35 = 35%)
-    openInterest:      num(c.open_interest),
-    breakEvenPrice:    num(c.break_even_price),
-    last:              num(c.day?.close),
-    volume:            num(c.day?.volume),
-  };
-}
-
-function num(v) {
-  if (v == null || v === "") return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
+  return expiry
+    ? handlePerExpiry({ apiKey, ticker, expiry })
+    : handleInitial({ apiKey, ticker });
 }

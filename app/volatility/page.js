@@ -20,23 +20,61 @@ export default function VolatilityLab() {
   const [passwordError, setPasswordError] = useState("");
 
   // Data state
+  //
+  // Архитектура: один initial fetch на тикер (без expiry) даёт meta
+  // (underlyingPrice, expirations[], defaultExpiry) + contracts для default.
+  // На смену даты в селекторе — per-expiry fetch (с expiry param), который
+  // тянет Finviz e=date с реальными греками и кладёт contracts в кэш.
+  // Один раз запросили — больше не повторяем.
   const [ticker, setTicker]   = useState("");
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(false);       // initial fetch
   const [error, setError]     = useState("");
-  const [data, setData]       = useState(null); // { ticker, underlyingPrice, contracts, expirations, ... }
-  const [selectedExpiry, setSelectedExpiry] = useState(null);
+  const [meta, setMeta]       = useState(null);        // {ticker, underlyingPrice, expirations[], defaultExpiry}
+  const [contractsByExpiry, setContractsByExpiry] = useState(new Map()); // expiry → contracts[]
+  const [selectedExpiry, setSelectedExpiry]       = useState(null);
+  const [expiryLoading, setExpiryLoading]         = useState(null); // null | "YYYY-MM-DD"
+  const [expiryError, setExpiryError]             = useState("");
 
-  // Whenever new data lands, auto-select the smartest default expiry.
-  // Rule (per spec):
-  //   1. Если у тикера есть today-expiry И по ней есть реальный объём
-  //      (ликвидный 0DTE — SPX/SPY) → today.
-  //   2. Иначе nearest future expiry with non-zero volume.
-  //   3. Иначе first expiry (любая, лишь бы был контракт).
-  // Если данные обнулились — reset selectedExpiry.
+  // Когда приходит initial response → выбираем default expiry.
   useEffect(() => {
-    if (!data?.expirations?.length) { setSelectedExpiry(null); return; }
-    setSelectedExpiry(pickDefaultExpiry(data.expirations));
-  }, [data]);
+    if (!meta?.expirations?.length) { setSelectedExpiry(null); return; }
+    setSelectedExpiry(meta.defaultExpiry || pickDefaultExpiry(meta.expirations));
+  }, [meta]);
+
+  // Когда меняется выбранная дата — если контрактов для неё нет в кэше,
+  // тянем per-expiry endpoint. Контракты для default ложатся в кэш ещё в
+  // analyze(), поэтому при первом рендере доп. запроса не будет.
+  useEffect(() => {
+    if (!ticker || !selectedExpiry) return;
+    if (contractsByExpiry.has(selectedExpiry)) return;
+    let cancelled = false;
+    (async () => {
+      setExpiryLoading(selectedExpiry);
+      setExpiryError("");
+      try {
+        const r = await fetch(
+          `/api/options-chain?ticker=${encodeURIComponent(ticker)}&expiry=${encodeURIComponent(selectedExpiry)}`
+        );
+        const j = await r.json();
+        if (cancelled) return;
+        if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+        setContractsByExpiry((prev) => {
+          const next = new Map(prev);
+          next.set(selectedExpiry, j.contracts || []);
+          return next;
+        });
+        // Если per-expiry endpoint вернул свежий underlyingPrice — обновим.
+        if (j.underlyingPrice != null) {
+          setMeta((prev) => prev ? { ...prev, underlyingPrice: j.underlyingPrice } : prev);
+        }
+      } catch (e) {
+        if (!cancelled) setExpiryError(e.message || "Ошибка загрузки цепочки");
+      } finally {
+        if (!cancelled) setExpiryLoading(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [ticker, selectedExpiry, contractsByExpiry]);
 
   useEffect(() => {
     try { setHasAccess(localStorage.getItem(KEY_ACCESS) === "1"); } catch {}
@@ -54,7 +92,10 @@ export default function VolatilityLab() {
   }
 
   async function analyze() {
-    setError(""); setData(null);
+    setError(""); setMeta(null);
+    setContractsByExpiry(new Map());
+    setSelectedExpiry(null);
+    setExpiryError("");
     const t = ticker.trim().toUpperCase();
     if (!t) { setError("Введи тикер"); return; }
     setLoading(true);
@@ -62,8 +103,17 @@ export default function VolatilityLab() {
       const r = await fetch(`/api/options-chain?ticker=${encodeURIComponent(t)}`);
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
-      if (!j.contracts?.length) throw new Error("Нет контрактов в опционной цепочке");
-      setData(j);
+      if (!j.expirations?.length) throw new Error("Нет экспираций в опционной цепочке");
+      // Кэшируем contracts для default expiry — initial response уже их вернул.
+      const initialMap = new Map();
+      if (j.expiry && j.contracts?.length) initialMap.set(j.expiry, j.contracts);
+      setContractsByExpiry(initialMap);
+      setMeta({
+        ticker: j.ticker,
+        underlyingPrice: j.underlyingPrice,
+        expirations: j.expirations,
+        defaultExpiry: j.defaultExpiry || j.expiry || null,
+      });
     } catch (e) {
       setError(e.message || "Ошибка");
     }
@@ -72,11 +122,13 @@ export default function VolatilityLab() {
 
   // ──────────────────────────────────────────────────────────────────────
   // Derived: ATM strike, IV-overview, ATM call/put greeks, sorted chain rows.
-  // Зависит от data И selectedExpiry — переключение даты пересчитывает всё.
-  const derived = useMemo(
-    () => deriveAnalysis(data, selectedExpiry),
-    [data, selectedExpiry]
-  );
+  // Зависит от contracts для выбранной даты И underlyingPrice.
+  const derived = useMemo(() => {
+    if (!meta || !selectedExpiry) return null;
+    const contracts = contractsByExpiry.get(selectedExpiry);
+    if (!contracts) return null;
+    return deriveAnalysis(contracts, selectedExpiry, meta.underlyingPrice);
+  }, [meta, selectedExpiry, contractsByExpiry]);
 
   if (!hasAccess) {
     return (
@@ -129,26 +181,31 @@ export default function VolatilityLab() {
         <button style={S.btnEmerald} onClick={analyze} disabled={loading}>
           {loading ? "ANALYZING…" : "АНАЛИЗИРОВАТЬ"}
         </button>
-        {data?.underlyingPrice != null && (
+        {meta?.underlyingPrice != null && (
           <div style={S.spotPill}>
             <div style={S.spotLabel}>SPOT</div>
-            <div style={S.spotVal}>${data.underlyingPrice.toFixed(2)}</div>
+            <div style={S.spotVal}>${meta.underlyingPrice.toFixed(2)}</div>
           </div>
         )}
       </div>
 
       {/* Input row 2: expiry selector (отображается после загрузки) */}
-      {data?.expirations?.length > 0 && (
+      {meta?.expirations?.length > 0 && (
         <ExpirySelector
-          expirations={data.expirations}
+          expirations={meta.expirations}
           selected={selectedExpiry}
           onChange={setSelectedExpiry}
+          loadingExpiry={expiryLoading}
         />
       )}
 
       {error && <div style={S.error}>{error}</div>}
+      {expiryError && <div style={S.error}>{expiryError}</div>}
+      {expiryLoading && !derived && (
+        <div style={S.empty}>Загружаю цепочку для {expiryLoading}…</div>
+      )}
 
-      {data && derived && (
+      {meta && derived && (
         <>
           {/* A. IV OVERVIEW */}
           <SectionTitle
@@ -237,13 +294,13 @@ function pickDefaultExpiry(expirations) {
   return future?.expiry || expirations[expirations.length - 1].expiry;
 }
 
-function deriveAnalysis(data, selectedExpiry) {
-  if (!data?.contracts?.length) return null;
+function deriveAnalysis(contracts, selectedExpiry, spot) {
+  if (!Array.isArray(contracts) || !contracts.length) return null;
   if (!selectedExpiry) return null;
-  const spot = data.underlyingPrice;
 
-  // Filter contracts to the selected expiry only.
-  const chainAt = data.contracts.filter((c) => c.expiration === selectedExpiry);
+  // Per-expiry endpoint возвращает только контракты для одной даты,
+  // но если данные пришли смешанные (например initial response) — фильтруем.
+  const chainAt = contracts.filter((c) => c.expiration === selectedExpiry);
   if (!chainAt.length) return null;
 
   // ATM strike — closest to spot. Fallback: median strike (если spot=null,
@@ -316,7 +373,7 @@ function computeBreakeven(contract) {
 // ExpirySelector — нативный <select> + контекстные стат (OI, volume) рядом.
 // "0DTE" tag для today, чтобы пользователь видел liquid 0DTE даже если
 // дефолт пошёл не на today.
-function ExpirySelector({ expirations, selected, onChange }) {
+function ExpirySelector({ expirations, selected, onChange, loadingExpiry }) {
   const sel = expirations.find((e) => e.expiry === selected) || null;
   const t = todayIso();
   return (
@@ -326,6 +383,7 @@ function ExpirySelector({ expirations, selected, onChange }) {
         style={S.expirySelect}
         value={selected || ""}
         onChange={(e) => onChange(e.target.value)}
+        disabled={!!loadingExpiry}
       >
         {expirations.map((e) => {
           const d = daysUntilIso(e.expiry);
@@ -338,7 +396,8 @@ function ExpirySelector({ expirations, selected, onChange }) {
           );
         })}
       </select>
-      {sel && (
+      {loadingExpiry && <div style={S.expiryStats}>загружаю…</div>}
+      {!loadingExpiry && sel && (
         <div style={S.expiryStats}>
           <span>{sel.contractCount} contracts</span>
           <span style={S.expiryStatsSep}>·</span>
