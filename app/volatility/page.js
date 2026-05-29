@@ -23,7 +23,20 @@ export default function VolatilityLab() {
   const [ticker, setTicker]   = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState("");
-  const [data, setData]       = useState(null); // { ticker, underlyingPrice, contracts, base }
+  const [data, setData]       = useState(null); // { ticker, underlyingPrice, contracts, expirations, ... }
+  const [selectedExpiry, setSelectedExpiry] = useState(null);
+
+  // Whenever new data lands, auto-select the smartest default expiry.
+  // Rule (per spec):
+  //   1. Если у тикера есть today-expiry И по ней есть реальный объём
+  //      (ликвидный 0DTE — SPX/SPY) → today.
+  //   2. Иначе nearest future expiry with non-zero volume.
+  //   3. Иначе first expiry (любая, лишь бы был контракт).
+  // Если данные обнулились — reset selectedExpiry.
+  useEffect(() => {
+    if (!data?.expirations?.length) { setSelectedExpiry(null); return; }
+    setSelectedExpiry(pickDefaultExpiry(data.expirations));
+  }, [data]);
 
   useEffect(() => {
     try { setHasAccess(localStorage.getItem(KEY_ACCESS) === "1"); } catch {}
@@ -58,9 +71,12 @@ export default function VolatilityLab() {
   }
 
   // ──────────────────────────────────────────────────────────────────────
-  // Derived: nearest expiration, ATM strike, IV-overview metrics,
-  // ATM call/put greeks, sorted chain rows.
-  const derived = useMemo(() => deriveAnalysis(data), [data]);
+  // Derived: ATM strike, IV-overview, ATM call/put greeks, sorted chain rows.
+  // Зависит от data И selectedExpiry — переключение даты пересчитывает всё.
+  const derived = useMemo(
+    () => deriveAnalysis(data, selectedExpiry),
+    [data, selectedExpiry]
+  );
 
   if (!hasAccess) {
     return (
@@ -100,7 +116,7 @@ export default function VolatilityLab() {
         </div>
       </div>
 
-      {/* Input */}
+      {/* Input row 1: ticker + analyze + spot */}
       <div style={S.inputRow}>
         <input
           style={S.inpTicker}
@@ -121,12 +137,25 @@ export default function VolatilityLab() {
         )}
       </div>
 
+      {/* Input row 2: expiry selector (отображается после загрузки) */}
+      {data?.expirations?.length > 0 && (
+        <ExpirySelector
+          expirations={data.expirations}
+          selected={selectedExpiry}
+          onChange={setSelectedExpiry}
+        />
+      )}
+
       {error && <div style={S.error}>{error}</div>}
 
       {data && derived && (
         <>
           {/* A. IV OVERVIEW */}
-          <SectionTitle num="01" name="IV Overview" hint={`nearest expiry · ${derived.expiry}`} />
+          <SectionTitle
+            num="01"
+            name="IV Overview"
+            hint={`${derived.expiry} · ${derived.daysToExpiry}d to expiry`}
+          />
           <IvOverview iv={derived.ivAvg} />
 
           {/* B. ATM Greeks */}
@@ -141,7 +170,7 @@ export default function VolatilityLab() {
           <SectionTitle
             num="03"
             name="Options Chain"
-            hint={`${derived.chainRows.length} rows · ${derived.expiry} · BE via Finviz premium`}
+            hint={`${derived.chainRows.length} rows · ${derived.expiry} (${derived.daysToExpiry}d) · BE via Finviz`}
           />
           <ChainTable rows={derived.chainRows} atmStrike={derived.atmStrike} />
 
@@ -158,68 +187,104 @@ export default function VolatilityLab() {
 // Derivation
 // ============================================================================
 
-function deriveAnalysis(data) {
+// Сегодня в локальном time-zone, формат YYYY-MM-DD — для сравнения с
+// expiration_date (Massive отдаёт в этом же формате).
+function todayIso() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+// Дней между сегодня и ISO-датой (whole days, может быть 0 для today).
+function daysUntilIso(iso) {
+  if (!iso) return null;
+  const today = new Date(todayIso() + "T00:00:00");
+  const target = new Date(iso + "T00:00:00");
+  return Math.max(0, Math.round((target - today) / 86400000));
+}
+
+// Default expiry per spec:
+//   1) today, если volumeSum > 0 (liquid 0DTE — SPX/SPY)
+//   2) nearest future с volumeSum > 0
+//   3) если ни у кого нет volume (probe вне торгов) — nearest future с oiSum > 0
+//   4) первое доступное по дате
+// expirations: [{expiry, contractCount, volumeSum, oiSum, callOi, putOi}]
+function pickDefaultExpiry(expirations) {
+  if (!expirations?.length) return null;
+  const t = todayIso();
+
+  // Step 1: today exists AND liquid?
+  const todayE = expirations.find((e) => e.expiry === t);
+  if (todayE && todayE.volumeSum > 0) return t;
+
+  // Step 2: nearest future expiry with non-zero volume
+  const futureWithVol = expirations
+    .filter((e) => e.expiry >= t && e.volumeSum > 0)
+    .sort((a, b) => (a.expiry < b.expiry ? -1 : 1))[0];
+  if (futureWithVol) return futureWithVol.expiry;
+
+  // Step 3: same but with OI > 0 (off-hours probe — volumes are 0 чаще всего)
+  const futureWithOi = expirations
+    .filter((e) => e.expiry >= t && e.oiSum > 0)
+    .sort((a, b) => (a.expiry < b.expiry ? -1 : 1))[0];
+  if (futureWithOi) return futureWithOi.expiry;
+
+  // Step 4: any future expiry; иначе самая поздняя из прошлого
+  const future = expirations.filter((e) => e.expiry >= t)
+    .sort((a, b) => (a.expiry < b.expiry ? -1 : 1))[0];
+  return future?.expiry || expirations[expirations.length - 1].expiry;
+}
+
+function deriveAnalysis(data, selectedExpiry) {
   if (!data?.contracts?.length) return null;
+  if (!selectedExpiry) return null;
   const spot = data.underlyingPrice;
 
-  // Step 1: pick nearest expiration (earliest date ≥ today)
-  const today = new Date().toISOString().slice(0, 10);
-  const byExpiry = new Map();
-  for (const c of data.contracts) {
-    if (!c.expiration) continue;
-    if (c.expiration < today) continue;
-    if (!byExpiry.has(c.expiration)) byExpiry.set(c.expiration, []);
-    byExpiry.get(c.expiration).push(c);
-  }
-  if (!byExpiry.size) {
-    // Edge case: all contracts are in past — fall back to all
-    const exp = [...new Set(data.contracts.map((c) => c.expiration).filter(Boolean))].sort()[0];
-    if (!exp) return null;
-    byExpiry.set(exp, data.contracts.filter((c) => c.expiration === exp));
-  }
-  const expiries = [...byExpiry.keys()].sort();
-  const nearest = expiries[0];
-  const nearChain = byExpiry.get(nearest);
+  // Filter contracts to the selected expiry only.
+  const chainAt = data.contracts.filter((c) => c.expiration === selectedExpiry);
+  if (!chainAt.length) return null;
 
-  // Step 2: ATM strike — closest strike to spot. If spot unknown,
-  // pick median strike as a fallback so the page still renders.
-  const strikes = [...new Set(nearChain.map((c) => c.strike).filter((s) => Number.isFinite(s)))].sort((a, b) => a - b);
+  // ATM strike — closest to spot. Fallback: median strike (если spot=null,
+  // потому что FMP key умер и Massive Starter не отдаёт underlying.price).
+  const strikes = [...new Set(chainAt.map((c) => c.strike).filter((s) => Number.isFinite(s)))]
+    .sort((a, b) => a - b);
   let atmStrike = null;
   if (spot != null && strikes.length) {
-    atmStrike = strikes.reduce((best, s) =>
-      Math.abs(s - spot) < Math.abs(best - spot) ? s : best,
+    atmStrike = strikes.reduce(
+      (best, s) => (Math.abs(s - spot) < Math.abs(best - spot) ? s : best),
       strikes[0]
     );
   } else if (strikes.length) {
     atmStrike = strikes[Math.floor(strikes.length / 2)];
   }
 
-  // Step 3: ATM call & put
-  const atmCall = nearChain.find((c) => c.strike === atmStrike && c.type === "call") || null;
-  const atmPut  = nearChain.find((c) => c.strike === atmStrike && c.type === "put")  || null;
+  // ATM call & put для выбранной экспирации.
+  const atmCall = chainAt.find((c) => c.strike === atmStrike && c.type === "call") || null;
+  const atmPut  = chainAt.find((c) => c.strike === atmStrike && c.type === "put")  || null;
 
-  // Step 4: IV average across ATM call+put (closer to market expectation than
-  // the entire chain — IV smile distorts wing strikes).
+  // IV среднее по ATM call+put (рыночное ожидание для выбранного horizon).
   const ivVals = [atmCall?.iv, atmPut?.iv].filter((v) => v != null && v > 0);
   const ivAvgRaw = ivVals.length ? ivVals.reduce((a, b) => a + b, 0) / ivVals.length : null;
-  const ivAvg = ivAvgRaw != null ? ivAvgRaw * 100 : null;  // → percent
+  const ivAvg = ivAvgRaw != null ? ivAvgRaw * 100 : null; // → percent
 
-  // Step 5: chain rows sorted by strike, with type-order calls→puts on same strike
-  const chainRows = [...nearChain]
+  // Chain rows: sort by strike, calls перед puts на одном страйке.
+  const chainRows = [...chainAt]
     .filter((c) => Number.isFinite(c.strike) && c.type)
     .sort((a, b) => {
       if (a.strike !== b.strike) return a.strike - b.strike;
-      return a.type === "call" ? -1 : 1;  // call before put at same strike
+      return a.type === "call" ? -1 : 1;
     });
 
   return {
-    expiry: nearest,
+    expiry: selectedExpiry,
+    daysToExpiry: daysUntilIso(selectedExpiry),
     atmStrike,
     atmCall,
     atmPut,
     ivAvg,
     chainRows,
-    expiries,
   };
 }
 
@@ -247,6 +312,53 @@ function computeBreakeven(contract) {
 // ============================================================================
 // Sub-components
 // ============================================================================
+
+// ExpirySelector — нативный <select> + контекстные стат (OI, volume) рядом.
+// "0DTE" tag для today, чтобы пользователь видел liquid 0DTE даже если
+// дефолт пошёл не на today.
+function ExpirySelector({ expirations, selected, onChange }) {
+  const sel = expirations.find((e) => e.expiry === selected) || null;
+  const t = todayIso();
+  return (
+    <div style={S.expiryRow}>
+      <div style={S.expiryLabel}>EXPIRY</div>
+      <select
+        style={S.expirySelect}
+        value={selected || ""}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {expirations.map((e) => {
+          const d = daysUntilIso(e.expiry);
+          const tag = e.expiry === t ? " · 0DTE" : "";
+          const liq = e.volumeSum > 0 ? "" : (e.oiSum > 0 ? " · no vol" : " · no OI");
+          return (
+            <option key={e.expiry} value={e.expiry}>
+              {e.expiry} ({d}d){tag}{liq}
+            </option>
+          );
+        })}
+      </select>
+      {sel && (
+        <div style={S.expiryStats}>
+          <span>{sel.contractCount} contracts</span>
+          <span style={S.expiryStatsSep}>·</span>
+          <span>vol {fmtIntShort(sel.volumeSum)}</span>
+          <span style={S.expiryStatsSep}>·</span>
+          <span>OI {fmtIntShort(sel.oiSum)}</span>
+          <span style={S.expiryStatsSep}>·</span>
+          <span>P/C OI {(sel.putOi / Math.max(1, sel.callOi)).toFixed(2)}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function fmtIntShort(n) {
+  if (n == null) return "—";
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + "K";
+  return String(n);
+}
 
 function SectionTitle({ num, name, hint }) {
   return (
@@ -490,6 +602,13 @@ const S = {
   error: { padding: "12px 16px", background: "#1f0a0a", color: C.red, border: `1px solid ${C.red}`, borderRadius: 2, marginTop: 16, fontSize: 12, fontFamily: FONT_MONO },
 
   inputRow: { display: "flex", gap: 12, alignItems: "center", marginBottom: 12 },
+
+  // Expiry selector — отдельная строка ниже ticker'а, появляется после загрузки.
+  expiryRow:    { display: "flex", gap: 12, alignItems: "center", marginBottom: 16, padding: "10px 14px", background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: 2 },
+  expiryLabel:  { color: C.textMute, fontSize: 9, fontWeight: 700, letterSpacing: 1.5, fontFamily: FONT_MONO, textTransform: "uppercase" },
+  expirySelect: { padding: "8px 12px", background: C.bgCell, color: C.text, border: `1px solid ${C.border}`, borderRadius: 2, fontSize: 13, fontFamily: FONT_MONO, cursor: "pointer", minWidth: 240 },
+  expiryStats:  { display: "flex", alignItems: "center", gap: 6, color: C.textDim, fontSize: 11, fontFamily: FONT_MONO, marginLeft: "auto", fontVariantNumeric: "tabular-nums" },
+  expiryStatsSep: { color: C.textMute },
   spotPill: { display: "flex", flexDirection: "column", alignItems: "center", padding: "6px 18px", background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: 4, marginLeft: "auto" },
   spotLabel:{ color: C.textMute, fontSize: 9, fontWeight: 700, letterSpacing: 1.5, fontFamily: FONT_MONO },
   spotVal:  { color: "#fff", fontSize: 20, fontWeight: 700, fontFamily: FONT_MONO, fontVariantNumeric: "tabular-nums" },

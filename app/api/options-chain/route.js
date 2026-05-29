@@ -116,6 +116,21 @@ async function fetchFinvizOptionsChain(ticker) {
   }
 }
 
+// Parse Finviz numeric — tolerates "23.45%", "5,000", empty string.
+function parseFvNum(v) {
+  if (v == null || v === "") return null;
+  const n = parseFloat(String(v).replace("%", "").replace(/,/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
+// Convert Finviz date "M/D/YYYY" → ISO "YYYY-MM-DD" (matches Massive).
+function parseFvDateToIso(s) {
+  if (!s) return null;
+  const m = String(s).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!m) return null;
+  return `${m[3]}-${String(m[1]).padStart(2, "0")}-${String(m[2]).padStart(2, "0")}`;
+}
+
 // Build lookup map: "strike|type|YYYY-MM-DD" → {premium, source}.
 // Priority: Last Close → Mid(Bid,Ask) → Ask → Bid.
 function buildFinvizPremiumMap(rows) {
@@ -230,36 +245,98 @@ export async function GET(request) {
       );
     }
 
-    // Normalize контракты в плоскую форму. Underlying price берём из первого
-    // контракта (он одинаков для всех — это spot price базового актива).
-    const rawContracts = data.results.map(normalizeContract).filter(Boolean);
+    // Normalize контракты из Massive в плоскую форму.
+    const rawMassiveContracts = data.results.map(normalizeContract).filter(Boolean);
     const massivePrice = data.results[0]?.underlying_asset?.price ?? null;
 
-    // Параллельно тянем (а) FMP для underlying-price fallback'а и
-    // (б) Finviz Elite options chain для реальных премий → breakeven.
-    // Promise.all чтобы не складывать latency'ы последовательно.
+    // Параллельно тянем (а) FMP underlying-price fallback и
+    // (б) Finviz Elite options chain — он отдаёт ВСЕ экспирации (~28 для
+    // ликвидного тикера), Massive Starter план cap'ит на 250 контрактов
+    // (обычно сгруппированы вокруг ближайшей экспирации). Поэтому для
+    // полноты цепочки делаем union с Finviz.
     const [fmp, finviz] = await Promise.all([
       fetchFmpPrice(tickerRaw),
       fetchFinvizOptionsChain(tickerRaw),
     ]);
     const underlyingPrice = fmp.price ?? massivePrice;
-    const premiumMap = buildFinvizPremiumMap(finviz.rows);
 
-    // Merge Finviz premium → marketPremium / premiumSource. Если matched
-    // (strike + type + expiry) — клиент посчитает BE = strike ± premium.
-    // Если нет matched — поле null, UI рендерит "—" (BS НЕ используется,
-    // user explicit: реальные данные only).
-    let premiumMatched = 0;
-    const contracts = rawContracts.map(c => {
-      const key = `${c.strike}|${c.type}|${c.expiration}`;
-      const lookup = premiumMap.get(key);
-      if (lookup) premiumMatched++;
-      return {
-        ...c,
-        marketPremium: lookup?.premium ?? null,
-        premiumSource: lookup?.source ?? null,
-      };
-    });
+    // Index Massive contracts by strike|type|expiry для O(1) lookup.
+    const massiveByKey = new Map();
+    for (const c of rawMassiveContracts) {
+      massiveByKey.set(`${c.strike}|${c.type}|${c.expiration}`, c);
+    }
+
+    // Build full unified chain: iterate over Finviz rows (полный покрытие),
+    // для каждого row look up Massive. Если есть — берём greeks/IV/OI
+    // из Massive (он точнее и официально primary). Если нет — fallback
+    // на Finviz fields для тех же полей. Premium всегда из Finviz.
+    //
+    // Важно: Finviz IV приходит в percent (23.45), Massive в decimal
+    // (0.2345). При fallback нормализуем Finviz IV → decimal делением на 100,
+    // чтобы клиент мог одинаково умножать на 100 для отображения.
+    let massiveMatched = 0;
+    let finvizOnly = 0;
+    const unifiedContracts = [];
+    for (const fv of finviz.rows) {
+      const type = (fv.Type || "").trim().toLowerCase();
+      const strike = parseFvNum(fv.Strike);
+      const expIso = parseFvDateToIso(fv.Expiry);
+      if (!type || !Number.isFinite(strike) || !expIso) continue;
+
+      const key = `${strike}|${type}|${expIso}`;
+      const massive = massiveByKey.get(key);
+      if (massive) massiveMatched++; else finvizOnly++;
+
+      // Premium priority: Last Close → Mid(Bid,Ask) → Ask → Bid.
+      const lastClose = parseFvNum(fv["Last Close"]);
+      const bid = parseFvNum(fv.Bid);
+      const ask = parseFvNum(fv.Ask);
+      let premium = null, premiumSource = null;
+      if (lastClose != null && lastClose > 0) { premium = lastClose; premiumSource = "last_close"; }
+      else if (bid != null && ask != null && bid > 0 && ask > 0) { premium = (bid + ask) / 2; premiumSource = "mid"; }
+      else if (ask != null && ask > 0) { premium = ask; premiumSource = "ask"; }
+      else if (bid != null && bid > 0) { premium = bid; premiumSource = "bid"; }
+
+      // Finviz IV percent → decimal (для совместимости с Massive).
+      const fvIvPct = parseFvNum(fv.IV);
+      const fvIvDec = fvIvPct != null ? fvIvPct / 100 : null;
+
+      unifiedContracts.push({
+        contractTicker: fv["Contract Name"] || massive?.contractTicker || null,
+        type, strike, expiration: expIso,
+        // Massive preferred, Finviz fallback. greeksSource показывает откуда
+        // фактически взяли — для transparency в UI / debug.
+        delta:         massive?.delta        ?? parseFvNum(fv.Delta),
+        gamma:         massive?.gamma        ?? parseFvNum(fv.Gamma),
+        theta:         massive?.theta        ?? parseFvNum(fv.Theta),
+        vega:          massive?.vega         ?? parseFvNum(fv.Vega),
+        iv:            massive?.iv           ?? fvIvDec,
+        openInterest:  massive?.openInterest ?? parseFvNum(fv["Open Int."]),
+        volume:        massive?.volume       ?? parseFvNum(fv.Volume),
+        marketPremium: premium,
+        premiumSource,
+        greeksSource:  massive ? "massive" : "finviz",
+      });
+    }
+
+    // Build expirations summary — клиент использует для dropdown'а
+    // и default selection (предпочесть liquid expiry).
+    const expirySummary = new Map(); // expIso → {expiry, contractCount, volumeSum, oiSum, callOi, putOi}
+    for (const c of unifiedContracts) {
+      let s = expirySummary.get(c.expiration);
+      if (!s) {
+        s = { expiry: c.expiration, contractCount: 0, volumeSum: 0, oiSum: 0, callOi: 0, putOi: 0 };
+        expirySummary.set(c.expiration, s);
+      }
+      s.contractCount++;
+      s.volumeSum += c.volume || 0;
+      s.oiSum += c.openInterest || 0;
+      if (c.type === "call") s.callOi += c.openInterest || 0;
+      if (c.type === "put")  s.putOi  += c.openInterest || 0;
+    }
+    const expirations = [...expirySummary.values()].sort((a, b) =>
+      a.expiry < b.expiry ? -1 : a.expiry > b.expiry ? 1 : 0
+    );
 
     return Response.json({
       ok: true,
@@ -272,16 +349,18 @@ export async function GET(request) {
         used: underlyingPrice === fmp.price && fmp.price != null ? "fmp" : "massive",
         fmp_status: fmp.source,
       },
-      finvizPremiums: {
-        rowsFetched: finviz.rows?.length || 0,
-        mapEntries: premiumMap.size,
-        contractsMatched: premiumMatched,
-        contractsTotal: contracts.length,
-        error: finviz.error || null,
-        status: finviz.status,
+      dataSources: {
+        massiveContracts: rawMassiveContracts.length,
+        finvizRows: finviz.rows?.length || 0,
+        unifiedContracts: unifiedContracts.length,
+        massiveMatched,
+        finvizOnly,
+        finvizError: finviz.error || null,
+        finvizStatus: finviz.status,
       },
-      contractCount: contracts.length,
-      contracts,
+      expirations,
+      contractCount: unifiedContracts.length,
+      contracts: unifiedContracts,
       tried,
     });
   }
