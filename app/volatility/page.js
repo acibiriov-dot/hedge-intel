@@ -133,16 +133,16 @@ export default function VolatilityLab() {
     return (
       <div style={S.page}>
         <div style={S.lockBox}>
-          <h1 style={S.title}>VOLATILITY LAB</h1>
-          <p style={S.subtitle}>Authentication required.</p>
+          <h1 style={S.title}>ОПЦИОННЫЙ АРХИТЕКТОР</h1>
+          <p style={S.subtitle}>Требуется вход.</p>
           <input
             style={{ ...S.inp, marginTop: 12, width: "100%" }}
-            type="password" value={passwordInput} placeholder="passphrase" autoFocus
+            type="password" value={passwordInput} placeholder="пароль" autoFocus
             onChange={(e) => { setPasswordInput(e.target.value); setPasswordError(""); }}
             onKeyDown={(e) => { if (e.key === "Enter") tryLogin(); }}
           />
           {passwordError && <div style={S.errorInline}>{passwordError}</div>}
-          <button style={{ ...S.btnEmerald, marginTop: 12 }} onClick={tryLogin}>ENTER</button>
+          <button style={{ ...S.btnEmerald, marginTop: 12 }} onClick={tryLogin}>ВОЙТИ</button>
         </div>
       </div>
     );
@@ -151,9 +151,9 @@ export default function VolatilityLab() {
   return (
     <div style={S.page}>
       <div style={S.heading}>
-        <div style={S.brand}>VOLATILITY LAB</div>
+        <div style={S.brand}>ОПЦИОННЫЙ АРХИТЕКТОР</div>
         <div style={S.brandSub}>
-          IV analytics · options chain · Massive (formerly Polygon) API
+          IV-аналитика · цепочка опционов · API Massive (бывш. Polygon)
         </div>
       </div>
 
@@ -168,7 +168,7 @@ export default function VolatilityLab() {
           maxLength={10}
         />
         <button style={S.btnEmerald} onClick={analyze} disabled={loading}>
-          {loading ? "ANALYZING…" : "АНАЛИЗИРОВАТЬ"}
+          {loading ? "АНАЛИЗИРУЮ…" : "АНАЛИЗИРОВАТЬ"}
         </button>
       </div>
 
@@ -180,7 +180,7 @@ export default function VolatilityLab() {
           <div style={S.priceValue}>
             {meta.underlyingPrice != null ? `$${meta.underlyingPrice.toFixed(2)}` : "—"}
           </div>
-          <div style={S.priceLabel}>SPOT PRICE</div>
+          <div style={S.priceLabel}>СПОТ-ЦЕНА</div>
         </div>
       )}
 
@@ -205,15 +205,15 @@ export default function VolatilityLab() {
           {/* A. IV OVERVIEW */}
           <SectionTitle
             num="01"
-            name="IV Overview"
-            hint={`${derived.expiry} · ${derived.daysToExpiry}d to expiry`}
+            name="Обзор IV"
+            hint={`${derived.expiry} · ${derived.daysToExpiry}d до экспирации`}
           />
           <IvOverview iv={derived.ivAvg} />
 
           {/* B. ATM Greeks */}
           <SectionTitle
             num="02"
-            name="ATM Greeks"
+            name="ATM-греки"
             hint={derived.atmStrike != null ? `Strike $${derived.atmStrike.toFixed(2)}` : ""}
           />
           <AtmGreeks atmCall={derived.atmCall} atmPut={derived.atmPut} />
@@ -221,13 +221,13 @@ export default function VolatilityLab() {
           {/* C. Chain table */}
           <SectionTitle
             num="03"
-            name="Options Chain"
-            hint={`${derived.chainRows.length} rows · ${derived.expiry} (${derived.daysToExpiry}d) · BE via Finviz`}
+            name="Цепочка опционов"
+            hint={`${derived.chainRows.length} строк · ${derived.expiry} (${derived.daysToExpiry}d) · BE из Finviz`}
           />
           <ChainTable rows={derived.chainRows} atmStrike={derived.atmStrike} />
 
           {/* D. Recommendation */}
-          <SectionTitle num="04" name="Strategy Recommendation" />
+          <SectionTitle num="04" name="Рекомендация по стратегии" />
           <Recommendation iv={derived.ivAvg} />
 
           {/* E. Strategy Engine — продажа премии, автоподбор + ручной выбор.
@@ -389,7 +389,7 @@ function ExpirySelector({ expirations, selected, onChange, loadingExpiry }) {
   const t = todayIso();
   return (
     <div style={S.expiryRow}>
-      <div style={S.expiryLabel}>EXPIRY</div>
+      <div style={S.expiryLabel}>ЭКСПИРАЦИЯ</div>
       <select
         style={S.expirySelect}
         value={selected || ""}
@@ -399,7 +399,7 @@ function ExpirySelector({ expirations, selected, onChange, loadingExpiry }) {
         {expirations.map((e) => {
           const d = daysUntilIso(e.expiry);
           const tag = e.expiry === t ? " · 0DTE" : "";
-          const liq = e.volumeSum > 0 ? "" : (e.oiSum > 0 ? " · no vol" : " · no OI");
+          const liq = e.volumeSum > 0 ? "" : (e.oiSum > 0 ? " · без vol" : " · без OI");
           return (
             <option key={e.expiry} value={e.expiry}>
               {e.expiry} ({d}d){tag}{liq}
@@ -410,7 +410,7 @@ function ExpirySelector({ expirations, selected, onChange, loadingExpiry }) {
       {loadingExpiry && <div style={S.expiryStats}>загружаю…</div>}
       {!loadingExpiry && sel && (
         <div style={S.expiryStats}>
-          <span>{sel.contractCount} contracts</span>
+          <span>{sel.contractCount} контрактов</span>
           <span style={S.expiryStatsSep}>·</span>
           <span>vol {fmtIntShort(sel.volumeSum)}</span>
           <span style={S.expiryStatsSep}>·</span>
@@ -448,9 +448,9 @@ function ivColor(ivPct) {
 }
 function ivLabel(ivPct) {
   if (ivPct == null) return "—";
-  if (ivPct < IV_LOW_PCT)  return "LOW · покупать опционы";
-  if (ivPct < IV_HIGH_PCT) return "NORMAL · нейтральная среда";
-  return "HIGH · продавать премию";
+  if (ivPct < IV_LOW_PCT)  return "НИЗКАЯ · покупать опционы";
+  if (ivPct < IV_HIGH_PCT) return "СРЕДНЯЯ · нейтральная среда";
+  return "ВЫСОКАЯ · продавать премию";
 }
 function ivStrategyHint(ivPct) {
   if (ivPct == null) return "Недостаточно данных для рекомендации.";
@@ -468,7 +468,7 @@ function IvOverview({ iv }) {
   return (
     <div style={S.ivBox}>
       <div style={S.ivLeft}>
-        <div style={S.ivLabel}>ATM IMPLIED VOLATILITY</div>
+        <div style={S.ivLabel}>ATM IV</div>
         <div style={{ ...S.ivVal, color }}>
           {iv != null ? iv.toFixed(1) + "%" : "—"}
         </div>
@@ -548,7 +548,7 @@ function ChainTable({ rows, atmStrike }) {
         <thead>
           <tr>
             <th style={S.thNum}>Strike</th>
-            <th style={S.th}>Type</th>
+            <th style={S.th}>Тип</th>
             <th style={S.thNum}>IV %</th>
             <th style={S.thNum}>Delta</th>
             <th style={S.thNum}>Theta</th>
@@ -575,7 +575,7 @@ function ChainTable({ rows, atmStrike }) {
                 <td style={S.tdNum}>{r.delta != null ? r.delta.toFixed(3) : "—"}</td>
                 <td style={S.tdNum}>{r.theta != null ? r.theta.toFixed(3) : "—"}</td>
                 <td style={S.tdNum}>{r.openInterest ?? "—"}</td>
-                <td style={S.tdNum} title={r.premiumSource ? `source: ${r.premiumSource}` : ""}>
+                <td style={S.tdNum} title={r.premiumSource ? `источник: ${r.premiumSource}` : ""}>
                   {r.marketPremium != null ? "$" + r.marketPremium.toFixed(2) : "—"}
                 </td>
                 <td style={S.tdNum}>{be != null ? "$" + be.toFixed(2) : "—"}</td>
@@ -594,7 +594,7 @@ function Recommendation({ iv }) {
   }
   let title, strategies, reasoning;
   if (iv >= IV_HIGH_PCT) {
-    title = "🔥 SELL PREMIUM";
+    title = "🔥 ПРОДАВАТЬ ПРЕМИЮ";
     strategies = [
       ["Covered Call", "продажа OTM колла при наличии 100 акций"],
       ["Cash-Secured Put", "продажа OTM пута с резервом кэша на покупку"],
@@ -602,21 +602,21 @@ function Recommendation({ iv }) {
     ];
     reasoning = "Высокая IV → опционы переоценены. Продавая премию, получаешь edge от theta-decay и неизбежного IV crush после события или просто со временем.";
   } else if (iv < IV_LOW_PCT) {
-    title = "📈 BUY PREMIUM";
+    title = "📈 ПОКУПАТЬ ПРЕМИЮ";
     strategies = [
       ["Long Call", "ставка на рост базиса (направленная)"],
       ["Long Put",  "ставка на падение базиса (защита/спекуляция)"],
       ["Debit Spreads", "Bull Call Spread / Bear Put Spread — ограниченный риск"],
     ];
-    reasoning = "Низкая IV → опционы недооценены. Покупая премию сейчас, ты платишь меньше за тот же экспирационный потенциал. Дополнительный bonus: рост IV сам по себе двигает позицию в плюс (long vega).";
+    reasoning = "Низкая IV → опционы недооценены. Покупая премию сейчас, ты платишь меньше за тот же экспирационный потенциал. Дополнительный плюс: рост IV сам по себе двигает позицию в плюс (long vega).";
   } else {
-    title = "⚖️ NEUTRAL — DIRECTIONAL ONLY";
+    title = "⚖️ НЕЙТРАЛЬНО — ТОЛЬКО НАПРАВЛЕННЫЕ";
     strategies = [
-      ["Vertical Spreads", "Bull Call / Bear Put — баланс direction vs theta"],
+      ["Vertical Spreads", "Bull Call / Bear Put — баланс направления и theta"],
       ["Calendar Spread",  "если ожидается рост IV ближе к событию"],
       ["Stock + Hedge",    "акция + защитный пут (если IV ниже исторической)"],
     ];
-    reasoning = "IV в средней зоне — нет явного перекоса для лонга или шорта премии. Лучшие стратегии — те где direction-thesis важнее IV-thesis.";
+    reasoning = "IV в средней зоне — нет явного перекоса для лонга или шорта премии. Лучшие стратегии — те где тезис о направлении важнее тезиса об IV.";
   }
   return (
     <div style={S.recBox}>
